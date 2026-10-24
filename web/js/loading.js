@@ -10,7 +10,7 @@ const STATE = {
   starting: ['Подключение…', 'warn', 'соединяюсь с историком'],
   backfill: ['Загрузка истории', 'warn', ''],
   live: ['Идёт', 'ok', ''],
-  error: ['Ошибка', 'bad', 'повтор — автоматически'],
+  error: ['Ошибка', 'bad', 'повтор будет сам'],
 };
 const PAGE = 200;
 
@@ -59,12 +59,12 @@ export async function loadingPage(view) {
       el('a', { class: 'btn', href: '#/charts' }, 'Графики')),
     el('div', { class: 'card' },
       el('h2', {}, 'Журнал'),
-      el('p', { class: 'hint' }, 'Последние события копирования. Подробности ошибок — здесь ' +
+      el('p', { class: 'hint' }, 'Последние события копирования. Подробности ошибок есть здесь ' +
         'и в журнале приложения: окно start.bat или docker compose logs app.'),
       events),
     el('div', { class: 'card' },
       el('h2', {}, 'Теги'),
-      el('p', { class: 'hint' }, 'Что уже лежит в базе. Нажмите на тег — откроется его график.'),
+      el('p', { class: 'hint' }, 'Что уже лежит в базе. Нажмите на тег, чтобы открыть его график.'),
       el('div', { class: 'row', style: 'margin-bottom:10px' },
         el('div', { style: 'flex:1;min-width:220px' }, search),
         el('label', { class: 'check' }, inactive, 'показать и теги, которые больше не подходят под маски')),
@@ -89,7 +89,7 @@ export async function loadingPage(view) {
     const [text, kind, sub] = STATE[c.state] || [c.state, '', ''];
     s.state.value.textContent = text;
     s.state.value.className = `value ${kind}`;
-    s.state.sub.textContent = c.state === 'live' ? `новые значения — раз в ${c.poll_s} с`
+    s.state.sub.textContent = c.state === 'live' ? `новые значения раз в ${c.poll_s} с`
       : c.state === 'backfill' ? `${Math.round((c.progress || 0) * 100)}%` : sub;
     s.tags.value.textContent = count(c.running ? c.tags : db.tags_active);
     s.tags.sub.textContent = `в справочнике всего: ${count(db.tags_total)}`;
@@ -143,7 +143,7 @@ export async function loadingPage(view) {
       }
       if (!data.items.length) {
         tbody.append(el('tr', {}, el('td', { colspan: 6, class: 'muted' },
-          search.value ? 'Ничего не найдено' : 'Тегов пока нет — они появятся после первого ' +
+          search.value ? 'Ничего не найдено' : 'Тегов пока нет. Они появятся после первого ' +
             'обмена с историком')));
       }
       clear(footer).append(el('span', { class: 'muted' },

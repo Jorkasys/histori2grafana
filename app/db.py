@@ -68,8 +68,8 @@ class Database:
 
     async def migrate(self) -> None:
         async with self.acquire() as conn:
-            # В Docker база — с TimescaleDB, в комплекте без Docker — обычный
-            # PostgreSQL: приложение работает с обеими
+            # В Docker база идёт с TimescaleDB, в комплекте без Docker это обычный
+            # PostgreSQL. Приложение работает с обеими
             available = await conn.fetchval(
                 "SELECT count(*) FROM pg_available_extensions WHERE name = 'timescaledb'")
             if available:
@@ -187,9 +187,9 @@ class Database:
     async def write_window(self, tag_ids: Sequence[int], start: datetime, end: datetime,
                            records: list[tuple]) -> None:
         """Заменить значения тегов в (start, end] и сдвинуть отметку «скопировано
-        до» — одной транзакцией. Повторное чтение окна дублей не даёт.
+        до» одной транзакцией, чтобы повторное чтение окна не давало дублей.
 
-        records — (ts, tag_id, value, value_text, quality).
+        records: кортежи (ts, tag_id, value, value_text, quality).
         """
         ids = list(tag_ids)
         async with self.acquire() as conn:
@@ -272,9 +272,10 @@ class Database:
 
     async def series(self, tags: Sequence[dict[str, Any]], start: datetime, end: datetime,
                      points: int = 800) -> dict[int, dict[str, Any]]:
-        """Данные для графиков: на шаг (end − start) / points — среднее, минимум,
-        максимум и последнее значение. Плюс значение до начала окна (график не
-        начинается с пустоты) и его продолжение до конца скопированного."""
+        """Данные для графиков: на каждый шаг (end − start) / points среднее,
+        минимум, максимум и последнее значение. Добавляется и значение до начала
+        окна, чтобы график не начинался с пустоты, и его продолжение до конца
+        скопированного."""
         numeric = [t["tag_id"] for t in tags if t["datatype"] != "string"]
         texts = [t["tag_id"] for t in tags if t["datatype"] == "string"]
         step = max((end - start) / max(points, 10), timedelta(seconds=1))
@@ -294,7 +295,7 @@ class Database:
                     GROUP BY 1, 2
                     ORDER BY 1, 2
                     """, numeric, start, end, step)
-                # Точка шага — в его середине: среднее относится ко всему шагу
+                # Точку ставим в середину шага: среднее относится ко всему шагу
                 half = step.total_seconds() / 2
                 for r in rows:
                     out[r["tag_id"]]["points"].append(
@@ -340,11 +341,11 @@ class Database:
 
     async def raw_values(self, names: Sequence[str], start: datetime, end: datetime,
                          limit: int) -> dict[str, dict[str, Any]]:
-        """Значения тегов для скриптов — как скопированы, без усреднения.
+        """Значения тегов для скриптов в том виде, как они скопированы, без усреднения.
 
-        {имя из скрипта: {name, unit, datatype, t, v, end, too_many}}; имя
-        ищется без учёта регистра (как в историке). v = None — плохое
-        качество. Первая точка — значение, действовавшее к началу периода."""
+        Возвращает {имя из скрипта: {name, unit, datatype, t, v, end, too_many}}.
+        Имя ищется без учёта регистра, как в историке. None в v означает плохое
+        качество. Первая точка хранит значение, действовавшее к началу периода."""
         if not names:
             return {}
         wanted = {n.lower(): n for n in names}
@@ -387,7 +388,7 @@ class Database:
 
     async def export_rows(self, tag_ids: Sequence[int], start: datetime, end: datetime,
                           limit: int):
-        """Значения тегов по порядку времени — для выгрузки в CSV (по частям)."""
+        """Значения тегов по порядку времени, по частям, для выгрузки в CSV."""
         async with self.acquire() as conn:
             async with conn.transaction():
                 cursor = conn.cursor(
@@ -414,8 +415,8 @@ class Database:
         return dict(r) if r else None
 
     async def save_script(self, script_id: int | None, name: str, code: str) -> int | None:
-        """Создать (script_id=None) или изменить скрипт; None — такого нет.
-        Повтор имени — asyncpg.UniqueViolationError."""
+        """Создать (script_id=None) или изменить скрипт. Вернёт None, если такого
+        скрипта нет, а при повторе имени бросит asyncpg.UniqueViolationError."""
         async with self.acquire() as conn:
             if script_id is None:
                 return await conn.fetchval(

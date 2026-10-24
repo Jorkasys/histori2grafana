@@ -1,4 +1,4 @@
-// Страница «Графики»: несколько графиков, на каждом — теги и результаты скриптов.
+// Страница «Графики»: несколько графиков, на каждом теги и результаты скриптов.
 
 import {
   RANGES, clear, dateTime, debounce, el, fail, get, grafanaBase, hashParams, post, recall,
@@ -8,7 +8,7 @@ import { PENS, Trend } from './trend.js';
 
 const MAX_PANELS = 8;
 const MAX_ITEMS = 8;          // тегов и скриптов на одном графике
-const MAX_TAGS = 20;          // разных тегов на странице — столько отдаёт /api/series
+const MAX_TAGS = 20;          // разных тегов на странице, больше /api/series не отдаёт
 const STORE = 'charts.v2';
 
 function localInput(seconds) {
@@ -119,7 +119,7 @@ export async function chartsPage(view) {
           el('label', { class: 'check' }, auto, 'обновлять каждые 5 с'),
           el('span', { class: 'spacer' }),
           el('button', { class: 'small', type: 'button', onclick: () => exportCsv(),
-            title: 'Все значения тегов с графиков за период — для Excel' }, 'Скачать CSV'),
+            title: 'Все значения тегов с графиков за период, файл для Excel' }, 'Скачать CSV'),
           grafana),
         panelsBox, addPanel)),
   );
@@ -305,7 +305,7 @@ export async function chartsPage(view) {
   function merge() {
     const items = allItems();
     if (items.length > MAX_ITEMS) {
-      fail(new Error(`На один график помещается ${MAX_ITEMS} тегов и скриптов — ` +
+      fail(new Error(`На один график помещается ${MAX_ITEMS} тегов и скриптов, ` +
         'положил первые.'));
     }
     state.panels = [{ items: items.slice(0, MAX_ITEMS), fixed: {} }];
@@ -387,7 +387,7 @@ export async function chartsPage(view) {
           }
           if (tag.datatype === 'string') {
             const last = tag.quality === 0 ? (tag.text ?? '—') : 'плохое качество';
-            notes.push({ text: `${tag.name}: ${last} (текстовый тег, изменения — под графиком)`,
+            notes.push({ text: `${tag.name}: ${last} (текстовый тег, изменения под графиком)`,
               item: key, plain: true });
             trend.extra.append(textTable(tag));
             continue;
@@ -412,7 +412,7 @@ export async function chartsPage(view) {
           continue;
         }
         done.r.outputs.forEach((out, k) => {
-          // События (пики) рисуем цветом своего тега; шкала у ряда из тега — та же,
+          // События (пики) рисуем цветом своего тега. Шкала у ряда из тега та же,
           // что у тега (по единице или по имени тега)
           const base = out.kind === 'events' && out.source && panel.items.find((it) => it[0] === 't'
             && tagData.get(idOf(it)) && tagData.get(idOf(it)).name === out.source);
@@ -513,7 +513,7 @@ export async function chartsPage(view) {
   function exportCsv() {
     const ids = tagIds();
     if (!ids.length) {
-      fail(new Error('На графиках нет тегов — выгружать нечего'));
+      fail(new Error('На графиках нет тегов, выгружать нечего'));
       return;
     }
     const [from, to] = period();

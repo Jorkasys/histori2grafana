@@ -7,8 +7,8 @@
     stop.bat    →  python launcher.py stop    — остановить базу и Grafana
     check.bat   →  python launcher.py check [СЕРВЕР [ПОРТ]] — проверка связи
 
-Порты и пароли — в файле .env рядом (создаётся из .env.example при первом
-запуске). Данные — в папке data.
+Порты и пароли лежат в файле .env рядом (он создаётся из .env.example при
+первом запуске), данные в папке data.
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ def settings() -> dict[str, str]:
 
 
 def app_environment(cfg: dict[str, str]) -> None:
-    """Переменные окружения для приложения — до его импорта."""
+    """Задать переменные окружения для приложения. Вызывать до его импорта."""
     os.environ.update({
         "DB_HOST": "127.0.0.1", "DB_PORT": cfg["DB_PORT"], "DB_NAME": DB_NAME,
         "DB_USER": DB_USER, "DB_PASSWORD": cfg["DB_PASSWORD"],
@@ -88,8 +88,8 @@ def app_environment(cfg: dict[str, str]) -> None:
 
 
 def version() -> str:
-    """Версия приложения — из файла, без импорта: пакет app читает настройки
-    окружения при импорте, а они ещё не заданы."""
+    """Версия приложения из файла, без импорта: пакет app при импорте читает
+    переменные окружения, а они к этому моменту ещё не заданы."""
     text = (ROOT / "app" / "__init__.py").read_text(encoding="utf-8")
     found = re.search(r'__version__ = "([^"]+)"', text)
     return found.group(1) if found else "?"
@@ -127,7 +127,7 @@ def init_postgres(cfg: dict[str, str]) -> None:
     pwfile = DATA / "initdb.pw"
     pwfile.write_text(cfg["DB_PASSWORD"], encoding="utf-8")
     try:
-        # initdb не оставляет фоновых процессов — его вывод можно читать целиком
+        # initdb не оставляет фоновых процессов, так что его вывод можно читать целиком
         result = subprocess.run(
             [str(PG_BIN / "initdb.exe"), "-D", str(PG_DATA), "-U", DB_USER,
              f"--pwfile={pwfile}", "-E", "UTF8", "--no-locale", "-A", "scram-sha-256"],
@@ -143,7 +143,7 @@ def init_postgres(cfg: dict[str, str]) -> None:
 
 
 def start_postgres(cfg: dict[str, str]) -> bool:
-    """Запустить PostgreSQL; False — она уже работала."""
+    """Запустить PostgreSQL. Вернёт False, если она уже работала."""
     if not (PG_DATA / "PG_VERSION").exists():
         init_postgres(cfg)
     if pg_running():

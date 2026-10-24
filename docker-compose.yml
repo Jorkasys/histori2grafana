@@ -4,8 +4,8 @@
 #      copy .env.example .env          (в PowerShell: Copy-Item .env.example .env)
 #      docker compose up -d --build
 #
-#  Приложение — http://localhost:8000, Grafana — http://localhost:3000
-#  (порты меняются в .env). Подробно — docs/INSTALL.md.
+#  Приложение откроется на http://localhost:8000, Grafana на http://localhost:3000
+#  (порты меняются в .env). Подробная инструкция в docs/INSTALL.md.
 # ===========================================================================
 name: historian2grafana
 
@@ -60,7 +60,7 @@ services:
     ports:
       - "${APP_PORT:-8000}:8000"
     # Свои записи имён для серверов, которые не находятся из контейнера
-    # (раскомментируйте и впишите адрес — см. docs/INSTALL.md, «Неполадки»):
+    # (раскомментируйте и впишите адрес, подробнее в docs/INSTALL.md, «Неполадки»):
     # extra_hosts:
     #   - "HISTSRV01:10.20.30.40"
     logging:
@@ -82,7 +82,7 @@ services:
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
-      # Смотреть графики можно без входа; менять дашборды — после входа admin
+      # Смотреть графики можно без входа, а менять дашборды только после входа admin
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
       GF_USERS_ALLOW_SIGN_UP: "false"

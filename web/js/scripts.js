@@ -1,4 +1,4 @@
-// Страница «Скрипты»: выборка по тегам — пики, пороги, связи. Результат сразу на
+// Страница «Скрипты»: выборки по тегам (пики, пороги, связи). Результат сразу на
 // графике; сохранённый скрипт можно положить на любой график страницы «Графики».
 
 import {
@@ -350,7 +350,7 @@ export async function scriptsPage(view) {
   function showResult(result, window) {
     clear(outputBox);
     clear(eventsBox);
-    // Линии — каждая своим цветом; события (пики) — цветом линии своего тега
+    // Каждая линия своим цветом, события (пики) цветом линии своего тега
     const colors = [];
     const lineOf = new Map();
     result.outputs.forEach((out, k) => {
@@ -453,7 +453,7 @@ export async function scriptsPage(view) {
     async leave() {
       const ok = await confirmLeave();
       if (ok && dirty) {
-        // Ушли без сохранения — черновик больше не нужен
+        // Ушли без сохранения, черновик больше не нужен
         dirty = false;
         keep();
       }

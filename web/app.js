@@ -22,7 +22,7 @@ let current = null;
 async function route() {
   const name = (location.hash.replace(/^#\//, '').split('?')[0]) || '';
   if (!name) {
-    // Первый запуск — сразу на подключение, дальше — на загрузку
+    // При первом запуске открываем подключение, потом сразу загрузку
     location.hash = shared.settings && shared.settings.server ? '#/loading' : '#/connection';
     return;
   }

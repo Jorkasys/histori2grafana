@@ -1,6 +1,6 @@
 -- ===========================================================================
 --  Схема базы historian2grafana. Выполняется при каждом старте приложения,
---  поэтому всё — «IF NOT EXISTS»: повторный запуск ничего не ломает.
+--  поэтому везде «IF NOT EXISTS»: повторный запуск ничего не ломает.
 -- ===========================================================================
 
 -- Настройки приложения (подключение к историку и т. п.)
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS tag_sync (
     updated_at   timestamptz NOT NULL DEFAULT now()
 );
 
--- Значения тегов. quality: 0 — хорошее, 1 — плохое в историке (значение NULL)
+-- Значения тегов. quality: 0 хорошее, 1 плохое в историке (тогда value NULL)
 CREATE TABLE IF NOT EXISTS tag_value (
     ts         timestamptz NOT NULL,
     tag_id     integer NOT NULL,
@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS script (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- Последнее значение каждого тега — удобно для своих запросов в Grafana
+-- Последнее значение каждого тега, пригодится для своих запросов в Grafana
 CREATE OR REPLACE VIEW tag_latest AS
 SELECT t.tag_id, t.name, t.description, t.unit, t.datatype, t.active,
        v.ts, v.value, v.value_text, v.quality, s.synced_until, s.row_count

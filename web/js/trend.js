@@ -1,7 +1,7 @@
 // Панель-«самописец» на uPlot: несколько рядов на одной сетке, у каждой единицы
-// измерения — своя шкала. Мышью: протянуть по горизонтали — выбрать время
-// (страница загрузит этот период подробнее), по вертикали — диапазон значений,
-// рамкой — и то и другое. Двойной щелчок возвращает масштаб.
+// измерения своя шкала. Если протянуть мышью по горизонтали, выбирается время
+// (страница загрузит этот период подробнее), по вертикали диапазон значений,
+// рамкой и то и другое. Двойной щелчок возвращает масштаб.
 
 import { clear, dateTime, el, num } from './core.js';
 
@@ -12,8 +12,8 @@ const GRID = '#d6e0dc';
 const MINOR = '#edf2f0';
 const FONT = '12px Bahnschrift, "Segoe UI", Arial, sans-serif';
 
-// Подписи оси времени по-русски, 24 часа: секунды — на коротких периодах,
-// дата — на длинных
+// Подписи оси времени по-русски, 24 часа: на коротких периодах с секундами,
+// на длинных с датой
 export function timeTicks(_u, splits) {
   const span = splits.length > 1 ? splits[splits.length - 1] - splits[0] : 0;
   return splits.map((v) => {
@@ -28,7 +28,7 @@ export function timeTicks(_u, splits) {
 
 function valueTicks(_u, splits) {
   const step = splits.length > 1 ? Math.abs(splits[1] - splits[0]) : 1;
-  // Знаков после запятой — сколько нужно, чтобы шаг делений записался точно (2,5 → 1)
+  // Знаков после запятой столько, чтобы шаг делений записался точно (для 2,5 нужен 1)
   let digits = 0;
   while (step && digits < 6 && Math.abs(step * 10 ** digits - Math.round(step * 10 ** digits))
     > 1e-6 * 10 ** digits) digits += 1;
@@ -56,8 +56,8 @@ function rgba(hex, alpha) {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }
 
-// Общая ось времени для рядов с разными моментами. undefined — у ряда в этот
-// момент точки нет (линия идёт дальше), null — разрыв в самих данных
+// Общая ось времени для рядов с разными моментами. undefined значит, что у ряда в
+// этот момент точки нет и линия идёт дальше, null значит разрыв в самих данных
 function align(specs) {
   const moments = new Set();
   for (const s of specs) for (const t of s.t) moments.add(t);
@@ -209,7 +209,7 @@ export class Trend {
     this.plot = new uPlot({
       width: this.width(),
       height: this.opts.height,
-      // Справа без шкалы — место под последнюю подпись времени
+      // Если справа нет шкалы, оставляем место под последнюю подпись времени
       padding: [10, this.scaleKeys.length > 1 ? 6 : 22, 0, 2],
       legend: { show: false },
       scales,
@@ -272,7 +272,7 @@ export class Trend {
   renderScales() {
     clear(this.scalesBox);
     if (!this.scaleKeys.length) {
-      this.scalesBox.append(el('span', { class: 'muted' }, 'Добавьте теги — появятся их шкалы.'));
+      this.scalesBox.append(el('span', { class: 'muted' }, 'Добавьте теги, и здесь появятся их шкалы.'));
       return;
     }
     const parse = (text) => {
@@ -308,9 +308,10 @@ export class Trend {
         this.fixed = {};
         this.scalesChanged();
       } }, 'Все шкалы автоматически'),
-      el('span', { class: 'muted', style: 'flex-basis:100%' }, 'Пустые поля — автоматически. ' +
-        'Мышью: протяните по графику вверх или вниз — шкала значений, влево или вправо — время, ' +
-        'по диагонали — и то и другое. Двойной щелчок — вернуть.'));
+      el('span', { class: 'muted', style: 'flex-basis:100%' }, 'Пустые поля подбираются ' +
+        'автоматически. Мышью тоже можно: протяните по графику вверх или вниз, чтобы задать ' +
+        'шкалу значений, влево или вправо для времени, по диагонали для того и другого. Двойной ' +
+        'щелчок возвращает как было.'));
   }
 
   // --- легенда --------------------------------------------------------------------
@@ -322,7 +323,7 @@ export class Trend {
       const item = el('span', { class: `lg${this.hidden.has(s.key) ? ' off' : ''}`,
         style: `--c:${s.color}` },
       el('i', { class: `lg-mark${s.kind === 'events' ? ' dot' : ''}` }),
-      el('span', { class: 'lg-name', title: `${s.title || s.label}\nЩелчок — скрыть или показать`,
+      el('span', { class: 'lg-name', title: `${s.title || s.label}\nЩелчок скрывает или показывает ряд`,
         onclick: () => this.toggle(i) }, s.label),
       val,
       this.opts.onRemove && s.removable !== false
@@ -332,7 +333,7 @@ export class Trend {
       this.items.push({ node: item, val });
       this.legend.append(item);
     });
-    // Заметки — ошибки скриптов и т. п.; с item их можно убрать, как ряд
+    // Заметки: ошибки скриптов и т. п. Если у заметки есть item, её можно убрать, как ряд
     for (const note of this.notes) {
       const text = typeof note === 'string' ? note : note.text;
       this.legend.append(el('span', { class: `lg${note.plain ? '' : ' lg-err'}` }, text,

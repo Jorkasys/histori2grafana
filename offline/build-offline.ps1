@@ -12,7 +12,7 @@
     Архив переносится на компьютер без интернета, распаковывается, и там
     приложение запускается файлом start.bat. Docker не нужен.
 
-    С ключом -Update собирает только обновление — файлы приложения без Python,
+    С ключом -Update собирает только обновление: файлы приложения без Python,
     PostgreSQL и Grafana (меньше мегабайта, интернет не нужен):
 
         dist\historian2grafana-update-<версия>.zip
@@ -70,7 +70,7 @@ function Fetch([string]$Url, [string]$Name) {
 
 function Exists([string]$Path) {
     # Только что удалённая папка несколько секунд «удаляется», и Test-Path
-    # отвечает «Access denied» — считаем, что она ещё есть
+    # отвечает «Access denied». Считаем, что она ещё есть
     try { return (Test-Path $Path) } catch { return $true }
 }
 
@@ -108,7 +108,7 @@ function UnzipPostgres([string]$Archive, [string]$Destination) {
 }
 
 function Run([string]$Exe, [string[]]$Arguments) {
-    # Предупреждения программ в stderr — не повод останавливать сборку: смотрим код выхода
+    # Предупреждения программ в stderr не повод останавливать сборку, смотрим код выхода
     $saved = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     & $Exe @Arguments
@@ -118,7 +118,7 @@ function Run([string]$Exe, [string[]]$Arguments) {
 }
 
 function CopyApp([string]$Target) {
-    # Файлы приложения — одинаковые в полном комплекте и в обновлении
+    # Файлы приложения одинаковые в полном комплекте и в обновлении
     foreach ($dir in 'app', 'web', 'grafana', 'docker') {
         Copy-Item "$Project\$dir" "$Target\$dir" -Recurse
         Get-ChildItem "$Target\$dir" -Directory -Recurse -Filter '__pycache__' |
@@ -137,10 +137,10 @@ if ($Update) {
     $UpdateZip = "$UpdateRoot.zip"
     Step "Обновление ${version}: только файлы приложения"
     Wipe $UpdateRoot
-    # Внутри — папка с тем же именем, что у комплекта: распакованное ложится поверх
+    # Внутри папка с тем же именем, что у комплекта, чтобы распакованное легло поверх
     New-Item -ItemType Directory -Force "$UpdateRoot\historian2grafana-offline" | Out-Null
     CopyApp "$UpdateRoot\historian2grafana-offline"
-    # Шаги установки — рядом с папкой, в корне архива: Блокнот, UTF-8 с BOM, CRLF
+    # Шаги установки кладём в корень архива рядом с папкой. Для Блокнота: UTF-8 с BOM, CRLF
     $howto = (Get-Content "$Project\offline\update-howto.txt" -Raw -Encoding UTF8).Replace('{version}', $version)
     [IO.File]::WriteAllText("$UpdateRoot\Как обновить.txt", ($howto -replace "`r?`n", "`r`n"),
                             (New-Object Text.UTF8Encoding $true))
@@ -151,7 +151,7 @@ if ($Update) {
     $size = [math]::Round((Get-Item $UpdateZip).Length / 1KB)
     Write-Host ''
     Write-Host "Готово: $UpdateZip ($size КБ)" -ForegroundColor Green
-    Write-Host 'Как поставить — файл «Как обновить.txt» в архиве (то же — README.md, «Обновление комплекта»)'
+    Write-Host 'Как поставить, написано в «Как обновить.txt» в архиве и в README.md, раздел «Обновление комплекта»'
     return
 }
 
@@ -189,7 +189,7 @@ UnzipPostgres $pgZip "$Bundle\runtime\pgsql"
 if (-not (Test-Path "$Bundle\runtime\pgsql\bin\pg_ctl.exe")) {
     throw 'в архиве PostgreSQL не найден bin\pg_ctl.exe'
 }
-# PostgreSQL нужна библиотека Visual C++. На чистой Windows её может не быть —
+# PostgreSQL нужна библиотека Visual C++. На чистой Windows её может не быть,
 # кладём рядом (так Microsoft разрешает распространять эти файлы)
 foreach ($dll in 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll') {
     $source = "$env:WINDIR\System32\$dll"

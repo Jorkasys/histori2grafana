@@ -1,9 +1,9 @@
 # Образ приложения historian2grafana.
 #
-# База — Debian 12 (bookworm): для неё у Microsoft есть пакет ODBC-драйвера
-# SQL Server. Сборка ставит драйвер из репозитория Microsoft и тем самым
-# принимает его лицензию (ACCEPT_EULA=Y). Второй драйвер — FreeTDS — входит
-# в библиотеку pymssql: через него работает вход учётной записью Windows.
+# Образ собирается на Debian 12 (bookworm), потому что для него у Microsoft есть
+# пакет ODBC-драйвера SQL Server. Сборка ставит драйвер из репозитория Microsoft и
+# тем самым принимает его лицензию (ACCEPT_EULA=Y). Второй драйвер, FreeTDS, входит
+# в библиотеку pymssql, и через него работает вход учётной записью Windows.
 FROM python:3.12-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \

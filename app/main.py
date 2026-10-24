@@ -57,7 +57,7 @@ def create_app(settings: Settings | None = None, *, historian_factory=None,
         return out
 
     def merged(body: dict[str, Any], old: dict[str, Any]) -> dict[str, Any]:
-        """Новые настройки поверх сохранённых. Пустой пароль — «не менять»."""
+        """Новые настройки поверх сохранённых. Пустой пароль значит «не менять»."""
         raw = {**old, **{k: v for k, v in body.items() if k in DEFAULTS}}
         if not body.get("password"):
             raw["password"] = old.get("password", "")
@@ -154,8 +154,8 @@ def create_app(settings: Settings | None = None, *, historian_factory=None,
     async def export(ids: str, start: str = Query(..., alias="from"),
                      end: str | None = Query(None, alias="to"),
                      tz: int = Query(0, ge=-900, le=900)) -> StreamingResponse:
-        """Значения тегов за период в CSV для Excel: время по часам браузера
-        (tz — смещение из Date.getTimezoneOffset), «;» и десятичная запятая."""
+        """Значения тегов за период в CSV для Excel: время по часам браузера (tz
+        берётся из Date.getTimezoneOffset), разделитель «;», десятичная запятая."""
         id_list = _ids(ids)[:50]
         t0, t1 = _period(start, end)
         zone = timezone(timedelta(minutes=-tz))
@@ -164,7 +164,7 @@ def create_app(settings: Settings | None = None, *, historian_factory=None,
             return "" if value is None else repr(float(value)).replace(".", ",")
 
         async def lines():
-            # BOM — чтобы Excel сразу понял кодировку UTF-8
+            # BOM нужен, чтобы Excel сразу понял кодировку UTF-8
             yield "﻿Время;Тег;Значение;Качество\r\n".encode("utf-8")
             n = 0
             chunk: list[str] = []

@@ -1,4 +1,4 @@
-"""Настройки приложения из переменных окружения (в Docker — из файла .env)."""
+"""Настройки приложения из переменных окружения (в Docker они берутся из файла .env)."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ class Settings:
     # Учётная запись Grafana в базе: только чтение данных тегов
     reader_user: str = "grafana_reader"
     reader_password: str = "grafana_reader"
-    # Адрес Grafana для ссылок в интерфейсе: пусто — тот же компьютер, порт ниже
+    # Адрес Grafana для ссылок в интерфейсе. Если пусто, берутся этот компьютер и порт ниже
     grafana_url: str = ""
     grafana_port: int = 3000
     host: str = "0.0.0.0"

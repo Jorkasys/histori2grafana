@@ -3,20 +3,20 @@
 AVEVA Historian отдаёт историю через SQL Server: база ``Runtime``,
 справочник тегов ``dbo.Tag`` и расширенная таблица ``dbo.History``. Режим
 выборки задаётся «столбцами-параметрами» в условии запроса:
-``wwRetrievalMode`` (Delta — каждое записанное изменение, Cyclic — значение
-на каждый шаг), ``wwResolution``, ``wwTimeZone``, ``wwVersion``.
+``wwRetrievalMode`` (Delta отдаёт каждое записанное изменение, Cyclic одно
+значение на шаг), ``wwResolution``, ``wwTimeZone``, ``wwVersion``.
 
 Значения подставляются в запрос литералами, а не параметрами: расширенные
-таблицы обрабатывает собственный провайдер историка (INSQL), и литералы —
-то, что он гарантированно понимает. Это безопасно: строка в T-SQL
+таблицы обрабатывает собственный провайдер историка (INSQL), а литералы он
+понимает гарантированно. Это безопасно: строка в T-SQL
 экранируется удвоением кавычки, время пишется в формате ISO 8601 с «T»,
 который не зависит от языка и DATEFORMAT сервера.
 
 Подключиться можно двумя драйверами:
 
-* **ODBC** — Microsoft ODBC Driver 18 for SQL Server, вход логином SQL Server;
-* **FreeTDS** (библиотека pymssql) — вход логином SQL Server или учётной
-  записью Windows в виде ``ДОМЕН\\логин`` с паролем (NTLM). Так из
+* ODBC (Microsoft ODBC Driver 18 for SQL Server) для входа логином SQL Server;
+* FreeTDS (библиотека pymssql) для входа логином SQL Server или учётной
+  записью Windows вида ``ДОМЕН\\логин`` с паролем (NTLM). Так из
   Linux-контейнера можно войти доменной учётной записью, как в SSMS.
 """
 
@@ -37,7 +37,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 log = logging.getLogger("historian")
 
 APP_NAME = "historian2grafana"
-# dbo.Tag.TagType: 1 — аналоговый, 2 — дискретный, 3 — строковый
+# dbo.Tag.TagType: 1 аналоговый, 2 дискретный, 3 строковый
 TAG_TYPES = {1: "float64", 2: "bool", 3: "string"}
 # Длина текста запроса: у OPENQUERY предел 8000 символов
 MAX_SQL = {"direct": 60000, "openquery": 7000}
@@ -259,7 +259,7 @@ class Point:
 
 @dataclass
 class Step:
-    """Шаг проверки подключения — для отчёта в интерфейсе."""
+    """Один шаг проверки подключения, как он показывается в интерфейсе."""
 
     title: str
     ok: bool = True
@@ -279,8 +279,8 @@ def pick_driver(config: dict[str, Any]) -> str:
     if chosen != "auto":
         return chosen
     if config.get("auth") == "windows":
-        # На самой Windows без пароля — встроенный вход текущего пользователя
-        # через ODBC; в контейнере — FreeTDS с ДОМЕН\логин и паролем
+        # На самой Windows без пароля входим встроенным входом текущего
+        # пользователя через ODBC, а в контейнере через FreeTDS с ДОМЕН\логин
         if sys.platform == "win32" and not config.get("password"):
             return "odbc"
         return "freetds"
@@ -441,7 +441,7 @@ class Historian:
         try:
             rows = await self.fetch(tags_sql(d, self.include, self.exclude, strings))
         except HistorianError as exc:
-            # Справочники единиц бывают недоступны — тогда хотя бы имена и типы
+            # Справочник единиц бывает недоступен. Тогда берём хотя бы имена и типы
             log.warning("теги с единицами не прочитались (%s) — читаю без них", exc)
             rows = await self.fetch(tags_sql(d, self.include, self.exclude, strings,
                                              rich=False))
@@ -517,7 +517,7 @@ class Historian:
 
     # ------------------------------------------------------------- проверка
     async def server_info(self) -> list[str]:
-        """Версии SQL Server и историка, часы сервера — что удалось узнать."""
+        """Что удалось узнать о сервере: версии SQL Server и историка, часы."""
         if self._dialect is not None:
             return ["эмулятор историка"]
         out = []

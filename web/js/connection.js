@@ -5,7 +5,7 @@ import { clear, el, fail, get, post, put, shared, toast } from './core.js';
 const AUTH = [
   ['sql', 'Логин SQL Server',
     'Отдельный логин SQL Server с правом чтения базы Runtime. Его выдаёт администратор ' +
-    'историка. Самый надёжный способ.'],
+    'историка. Этот способ надёжнее всего.'],
   ['windows', 'Учётная запись Windows',
     'Доменная учётная запись, под которой вы входите в SSMS: логин в виде ДОМЕН\\логин ' +
     '(например CORP\\ivanov) и пароль от неё.'],
@@ -34,20 +34,20 @@ export async function connectionPage(view) {
     user: el('input', { value: config.user, autocomplete: 'off' }),
     password: el('input', {
       type: 'password', autocomplete: 'new-password',
-      placeholder: config.password_set ? 'сохранён — оставьте пустым, чтобы не менять' : '',
+      placeholder: config.password_set ? 'сохранён; пустое поле его не меняет' : '',
     }),
-    include: el('textarea', { placeholder: 'пусто — все теги историка\nили маски: Line1_*, Mixer_*' }),
+    include: el('textarea', { placeholder: 'пустое поле: все теги историка\nили маски: Line1_*, Mixer_*' }),
     exclude: el('input', { value: config.exclude }),
     strings: el('input', { type: 'checkbox', checked: config.strings }),
     poll_s: el('input', { value: config.poll_s, inputmode: 'numeric' }),
     history_hours: el('input', { value: config.history_hours, inputmode: 'numeric' }),
     driver: select([['auto', 'Автоматически (рекомендуется)'],
       ['odbc', 'Microsoft ODBC Driver 18 for SQL Server'], ['freetds', 'FreeTDS']], config.driver),
-    retrieval: select([['delta', 'Delta — каждое изменение, как записал историк'],
-      ['cyclic', 'Cyclic — одно значение на каждый шаг']], config.retrieval),
+    retrieval: select([['delta', 'Delta: каждое изменение, как записал историк'],
+      ['cyclic', 'Cyclic: одно значение на каждый шаг']], config.retrieval),
     resolution_ms: el('input', { value: config.resolution_ms, inputmode: 'numeric' }),
-    time_zone: el('input', { value: config.time_zone, placeholder: 'пусто — UTC' }),
-    linked_server: el('input', { value: config.linked_server, placeholder: 'пусто — не нужен' }),
+    time_zone: el('input', { value: config.time_zone, placeholder: 'пустое поле: UTC' }),
+    linked_server: el('input', { value: config.linked_server, placeholder: 'обычно не нужен' }),
     lag_s: el('input', { value: config.lag_s, inputmode: 'numeric' }),
     overlap_s: el('input', { value: config.overlap_s, inputmode: 'numeric' }),
   };
@@ -71,7 +71,7 @@ export async function connectionPage(view) {
     authHelp.textContent = auth === 'windows'
       ? 'Пишите домен и логин через обратную косую черту, как при входе в Windows. ' +
         'Если приложение запущено без Docker (start.bat) под этой же учётной записью, ' +
-        'логин и пароль можно оставить пустыми — вход будет как в SSMS.'
+        'логин и пароль можно оставить пустыми, и вход будет как в SSMS.'
       : '';
   };
   drawAuth();
@@ -173,7 +173,7 @@ export async function connectionPage(view) {
   view.append(
     el('h1', {}, 'Подключение к AVEVA Historian'),
     el('p', { class: 'lead' }, 'Укажите сервер историка и учётную запись, проверьте подключение ' +
-      'и запустите копирование. Приложение только читает историк — ничего в него не записывает.'),
+      'и запустите копирование. Приложение только читает историк и ничего в него не записывает.'),
 
     el('div', { class: 'card' },
       el('h2', {}, 'Сервер'),
@@ -181,9 +181,9 @@ export async function connectionPage(view) {
       el('div', { class: 'fields' },
         field('Сервер историка *', f.server, 'Имя компьютера, как в SSMS в поле «Server name». ' +
           'Из Docker надёжнее полное имя с доменом (HISTSRV01.домен.local) или IP-адрес. ' +
-          'Именованный экземпляр — СЕРВЕР\\ЭКЗЕМПЛЯР.'),
-        field('Порт', f.port, 'Пусто — стандартный 1433.'),
-        field('База', f.database, 'У AVEVA Historian — Runtime.'))),
+          'Именованный экземпляр пишется как СЕРВЕР\\ЭКЗЕМПЛЯР.'),
+        field('Порт', f.port, 'Если оставить пустым, будет стандартный 1433.'),
+        field('База', f.database, 'У AVEVA Historian это Runtime.'))),
 
     el('div', { class: 'card' },
       el('h2', {}, 'Вход'),
@@ -198,35 +198,37 @@ export async function connectionPage(view) {
       el('p', { class: 'hint' }, 'Теги выбираются по именам из таблицы Runtime.dbo.Tag. ' +
         'Новые теги, подходящие под маски, подхватываются сами в течение 10 минут.'),
       el('div', { class: 'fields' },
-        field('Какие теги копировать', f.include, 'Маски через запятую или с новой строки: ' +
-          '* — любые символы, ? — один символ. Пусто — все теги историка.', true),
-        field('Кроме тегов', f.exclude, 'Sys* — системные теги самого историка, их копировать ' +
-          'не нужно. Пусто — без исключений.'),
+        field('Какие теги копировать', f.include, 'Маски через запятую или с новой строки. ' +
+          'Звёздочка заменяет любые символы, знак вопроса один символ. Пустое поле значит все ' +
+          'теги историка.', true),
+        field('Кроме тегов', f.exclude, 'Sys* означает служебные теги самого историка, их ' +
+          'копировать не нужно. Пустое поле значит без исключений.'),
         field('Забирать новые значения раз в, с', f.poll_s, 'Обычно 5 секунд.'),
-        field('Загрузить историю за последние, ч', f.history_hours, 'При первом запуске ' +
-          'скопировать прошлое: 24 — сутки, 168 — неделя, 0 — только новые значения.'),
+        field('Загрузить историю за последние, ч', f.history_hours, 'Сколько прошлого ' +
+          'скопировать при первом запуске: 24 часа это сутки, 168 неделя, 0 только новые ' +
+          'значения.'),
         el('label', { class: 'check wide' }, f.strings,
           'Копировать и строковые теги (имя рецепта, номер партии)'))),
 
     el('details', { class: 'card' },
-      el('summary', {}, 'Дополнительно — менять, только если что-то не работает'),
+      el('summary', {}, 'Дополнительно (менять, только если что-то не работает)'),
       el('div', { class: 'fields' },
-        field('Драйвер', f.driver, 'Автоматически: для логина SQL Server — Microsoft ODBC, для ' +
-          'учётной записи Windows — FreeTDS. Если подключение не выходит одним драйвером, ' +
-          'попробуйте другой.'),
-        field('Режим выборки', f.retrieval, 'Delta — точная копия того, что записал историк. ' +
-          'Cyclic — меньше строк для очень часто меняющихся тегов.'),
+        field('Драйвер', f.driver, 'По умолчанию для логина SQL Server берётся Microsoft ODBC, ' +
+          'а для учётной записи Windows FreeTDS. Если с одним драйвером подключиться не ' +
+          'удаётся, попробуйте другой.'),
+        field('Режим выборки', f.retrieval, 'Delta даёт точную копию того, что записал историк. ' +
+          'Cyclic даёт меньше строк, если теги меняются очень часто.'),
         field('Шаг для Cyclic, мс', f.resolution_ms, 'Только для режима Cyclic.'),
-        field('Часовой пояс ответа', f.time_zone, 'Пусто — историк отдаёт время сразу в UTC ' +
-          '(рекомендуется). Если историк не принимает wwTimeZone — пояс сервера, ' +
-          'например Europe/Moscow.'),
+        field('Часовой пояс ответа', f.time_zone, 'Оставьте пустым, и историк отдаст время ' +
+          'сразу в UTC, так лучше всего. Если историк не принимает wwTimeZone, укажите пояс ' +
+          'сервера, например Europe/Moscow.'),
         field('Связанный сервер', f.linked_server, 'Только если подключаетесь не к самому ' +
           'историку, а к другому SQL Server, где историк подключён связанным сервером ' +
           '(обычно INSQL).'),
         field('Не брать последние, с', f.lag_s, 'Самые свежие секунды историк может ещё ' +
           'дописывать. Обычно 3.'),
-        field('Перекрытие, с', f.overlap_s, 'Каждый раз перечитывать немного уже ' +
-          'скопированного — подхватить значения, пришедшие с опозданием. Обычно 30.'))),
+        field('Перекрытие, с', f.overlap_s, 'При каждом обмене немного перечитывать уже ' +
+          'скопированное, чтобы подхватить значения, пришедшие с опозданием. Обычно 30.'))),
 
     el('div', { class: 'actions' }, btnTest, btnSave, btnStart, btnStop),
     result,
