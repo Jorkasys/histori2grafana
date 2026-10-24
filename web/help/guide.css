@@ -1,0 +1,34 @@
+/* Руководства внутри приложения (web/help): цвета и шрифт — как у страниц
+   (style.css), здесь — только оформление длинного текста. */
+
+.guide { max-width: 880px; margin: 0 auto; padding: 28px 24px 48px; }
+.guide h1 { font-size: 26px; margin: 0 0 10px; }
+.guide h2 {
+  font-size: 20px;
+  margin: 38px 0 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--rule);
+  scroll-margin-top: 64px;
+}
+.guide h3 { font-size: 16.5px; margin: 26px 0 8px; }
+.guide h4 { font-size: 15px; margin: 18px 0 6px; }
+.guide p, .guide li { line-height: 1.62; max-width: 78ch; }
+.guide li { margin: 3px 0; }
+.guide code { font: 13px var(--code); background: #f1f4f2; padding: 1px 4px; border-radius: 2px; }
+.guide pre.output { margin: 10px 0 16px; overflow-x: auto; white-space: pre; }
+.guide .note { margin: 14px 0 18px; }
+.guide .table-wrap { margin: 10px 0 18px; }
+.guide td { line-height: 1.5; }
+.guide figure { margin: 18px 0 22px; }
+.guide figure img { display: block; max-width: 100%; height: auto; border: 1px solid var(--rule); }
+.guide figcaption { color: var(--ink-3); font-size: 13px; margin-top: 6px; }
+
+.guide-toc { margin: 20px 0 6px; padding: 12px 18px 14px; background: #f6f8f7; border-left: 3px solid var(--pen); }
+.guide-toc .side-title { margin: 0 0 6px; color: var(--ink-3); font-size: 13px; }
+.guide-toc ol { margin: 0; padding-left: 22px; columns: 2 280px; column-gap: 28px; }
+.guide-toc li { margin: 2px 0; break-inside: avoid; }
+
+@media print {
+  .topbar { display: none; }
+  .guide { max-width: none; padding: 0; }
+}

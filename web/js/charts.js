@@ -1,0 +1,566 @@
+// Страница «Графики»: несколько графиков, на каждом — теги и результаты скриптов.
+
+import {
+  RANGES, clear, dateTime, debounce, el, fail, get, grafanaBase, hashParams, post, recall,
+  remember, shared,
+} from './core.js';
+import { PENS, Trend } from './trend.js';
+
+const MAX_PANELS = 8;
+const MAX_ITEMS = 8;          // тегов и скриптов на одном графике
+const MAX_TAGS = 20;          // разных тегов на странице — столько отдаёт /api/series
+const STORE = 'charts.v2';
+
+function localInput(seconds) {
+  const d = new Date(seconds * 1000);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+const iso = (seconds) => new Date(seconds * 1000).toISOString();
+
+// Графики в адресе страницы: p=t12.t15~s3 — графики через «~», теги (t) и скрипты (s) через «.»
+function parsePanels(text) {
+  return text.split('~').map((part) => ({
+    items: part.split('.').map((x) => x.match(/^([ts])(\d+)$/)).filter(Boolean)
+      .map((m) => `${m[1]}:${m[2]}`),
+    fixed: {},
+  }));
+}
+
+function formatPanels(panels) {
+  return panels.map((p) => p.items.map((k) => k.replace(':', '')).join('.')).join('~');
+}
+
+const idOf = (key) => Number(key.split(':')[1]);
+
+export async function chartsPage(view) {
+  const params = hashParams();
+  const saved = recall(STORE, {});
+  const state = {
+    panels: [],
+    active: 0,
+    range: params.get('range') || saved.range || '1h',
+    from: Number(params.get('from')) || null,
+    to: Number(params.get('to')) || null,
+    auto: saved.auto !== false,
+    colors: saved.colors || {},
+    tab: saved.tab || 'tags',
+    back: [],
+  };
+  if (params.get('ids')) {
+    state.panels = [{ items: params.get('ids').split(',').filter(Boolean).map((id) => `t:${id}`),
+      fixed: {} }];
+  } else if (params.get('p') !== null) {
+    state.panels = parsePanels(params.get('p'));
+  } else if (Array.isArray(saved.panels)) {
+    state.panels = saved.panels;
+    state.active = saved.active || 0;
+  }
+  if (!state.panels.length) state.panels = [{ items: [], fixed: {} }];
+  state.panels = state.panels.slice(0, MAX_PANELS);
+  state.active = Math.min(state.active, state.panels.length - 1);
+  if (state.range === 'custom' && !(state.from && state.to && state.from < state.to)) state.range = '1h';
+  if (!RANGES.some((r) => r[0] === state.range) && state.range !== 'custom') state.range = '1h';
+
+  const tagInfo = new Map();      // tag_id → {name, description, unit, datatype}
+  let scriptList = [];            // [{script_id, name}]
+  let found = [];                 // результаты поиска тегов
+  let tagData = new Map();
+  let scriptData = new Map();
+  let views = [];
+  let loading = false;
+  let again = false;
+  let scriptsAt = 0;
+  let timer = null;
+
+  // --- разметка ---------------------------------------------------------------
+  const search = el('input', { type: 'search', placeholder: 'Поиск по имени или описанию',
+    'aria-label': 'Поиск' });
+  const tabTags = el('button', { class: 'seg small', type: 'button',
+    onclick: () => setTab('tags') }, 'Теги');
+  const tabScripts = el('button', { class: 'seg small', type: 'button',
+    onclick: () => setTab('scripts') }, 'Скрипты');
+  const pickHint = el('p', { class: 'hint' });
+  const results = el('div', { class: 'results' });
+  const segs = el('div', { class: 'segs' });
+  const fromInput = el('input', { type: 'datetime-local', 'aria-label': 'Начало периода' });
+  const toInput = el('input', { type: 'datetime-local', 'aria-label': 'Конец периода' });
+  const back = el('button', { class: 'small', type: 'button', hidden: true,
+    onclick: () => goBack() }, 'Вернуть прежний период');
+  const auto = el('input', { type: 'checkbox', checked: state.auto });
+  const panelsBox = el('div', {});
+  const addPanel = el('button', { class: 'add-panel', type: 'button', onclick: () => newPanel() },
+    'Новый график');
+  const grafana = el('a', { class: 'btn small', target: '_blank', rel: 'noopener',
+    title: 'Те же теги и период в Grafana, в новой вкладке' }, 'Открыть в Grafana');
+
+  view.append(
+    el('h1', {}, 'Графики'),
+    el('p', { class: 'lead' }, 'Значения тегов из базы приложения. На один график можно ' +
+      'положить несколько тегов: у каждой единицы измерения — своя шкала. Протяните мышью по ' +
+      'графику, чтобы увеличить время или значения; двойной щелчок — вернуть.'),
+    el('div', { class: 'charts-layout' },
+      el('aside', { class: 'picker' },
+        el('div', { class: 'segs' }, tabTags, tabScripts),
+        search, pickHint, results),
+      el('section', {},
+        el('div', { class: 'toolbar' }, segs,
+          el('span', { class: 'row', style: 'gap:6px' },
+            el('span', { class: 'muted' }, 'с'), fromInput,
+            el('span', { class: 'muted' }, 'по'), toInput,
+            el('button', { class: 'small', type: 'button', onclick: () => custom() }, 'Показать')),
+          back),
+        el('div', { class: 'toolbar' },
+          el('button', { class: 'small', type: 'button', onclick: () => merge() },
+            'Все на один график'),
+          el('button', { class: 'small', type: 'button', onclick: () => split() },
+            'Каждый тег отдельно'),
+          el('label', { class: 'check' }, auto, 'обновлять каждые 5 с'),
+          el('span', { class: 'spacer' }),
+          el('button', { class: 'small', type: 'button', onclick: () => exportCsv(),
+            title: 'Все значения тегов с графиков за период — для Excel' }, 'Скачать CSV'),
+          grafana),
+        panelsBox, addPanel)),
+  );
+
+  // --- что на графиках ----------------------------------------------------------
+  const allItems = () => [...new Set(state.panels.flatMap((p) => p.items))];
+  const tagIds = () => [...new Set(allItems().filter((k) => k[0] === 't').map(idOf))];
+  const scriptIds = () => [...new Set(allItems().filter((k) => k[0] === 's').map(idOf))];
+
+  function colorOf(key) {
+    if (state.colors[key] === undefined) {
+      const used = new Set(allItems().map((k) => state.colors[k]).filter((c) => c !== undefined));
+      let c = 0;
+      while (used.has(c) && c < PENS.length) c += 1;
+      state.colors[key] = c % PENS.length;
+    }
+    return state.colors[key];
+  }
+
+  function save() {
+    const present = new Set(allItems());
+    for (const key of Object.keys(state.colors)) if (!present.has(key)) delete state.colors[key];
+    remember(STORE, { panels: state.panels, active: state.active,
+      range: state.range === 'custom' ? '1h' : state.range, auto: auto.checked,
+      colors: state.colors, tab: state.tab });
+    const query = new URLSearchParams({ p: formatPanels(state.panels), range: state.range });
+    if (state.range === 'custom') {
+      query.set('from', String(Math.round(state.from)));
+      query.set('to', String(Math.round(state.to)));
+    }
+    history.replaceState(null, '', `#/charts?${query}`);
+    grafanaLink();
+  }
+
+  function changed() {
+    save();
+    renderPanels();
+    drawPicker();
+    load();
+  }
+
+  // --- выбор тегов и скриптов -----------------------------------------------------
+  function setTab(tab) {
+    state.tab = tab;
+    save();
+    tabTags.classList.toggle('on', tab === 'tags');
+    tabScripts.classList.toggle('on', tab === 'scripts');
+    pickHint.textContent = tab === 'tags'
+      ? 'Щелчок кладёт тег на выделенный график (он отмечен синей чертой слева), повторный ' +
+        'щелчок убирает.'
+      : 'Сохранённые скрипты со страницы «Скрипты». Щелчок кладёт результат скрипта на ' +
+        'выделенный график.';
+    search.placeholder = tab === 'tags' ? 'Поиск по имени или описанию' : 'Поиск скрипта';
+    find();
+  }
+
+  async function find() {
+    try {
+      if (state.tab === 'tags') {
+        const data = await get(`/tags?${new URLSearchParams({ q: search.value.trim(), limit: 100 })}`);
+        found = data.items;
+        for (const t of found) tagInfo.set(t.tag_id, t);
+        found.total = data.total;
+      } else {
+        scriptList = (await get('/scripts')).items;
+      }
+      drawPicker();
+    } catch (error) { fail(error); }
+  }
+
+  function mark(key) {
+    const active = state.panels[state.active].items.includes(key);
+    const other = !active && allItems().includes(key);
+    return el('i', { class: `mark${active ? ' on' : other ? ' other' : ''}`,
+      style: active || other ? `--c:${PENS[colorOf(key)]}` : null });
+  }
+
+  function drawPicker() {
+    clear(results);
+    if (state.tab === 'tags') {
+      for (const t of found) {
+        const key = `t:${t.tag_id}`;
+        results.append(el('button', { class: 'pick', type: 'button', onclick: () => toggle(key) },
+          mark(key),
+          el('span', {}, el('span', { class: 'name' }, t.name),
+            t.description ? el('span', { class: 'desc' }, t.description) : null)));
+      }
+      if (!found.length) {
+        results.append(el('p', { class: 'muted' },
+          search.value ? 'Ничего не найдено' : 'Тегов пока нет: запустите копирование'));
+      } else if (found.total > found.length) {
+        results.append(el('p', { class: 'muted' },
+          `Показаны первые ${found.length} из ${found.total}. Уточните поиск.`));
+      }
+      return;
+    }
+    const q = search.value.trim().toLowerCase();
+    const list = scriptList.filter((s) => !q || s.name.toLowerCase().includes(q));
+    for (const s of list) {
+      const key = `s:${s.script_id}`;
+      results.append(el('button', { class: 'pick', type: 'button', onclick: () => toggle(key) },
+        mark(key), el('span', { class: 'name' }, s.name)));
+    }
+    if (!list.length) {
+      results.append(el('p', { class: 'muted' }, q ? 'Ничего не найдено. ' : 'Скриптов пока нет. ',
+        el('a', { href: '#/scripts' }, 'Написать скрипт')));
+    }
+  }
+
+  function toggle(key) {
+    const panel = state.panels[state.active];
+    if (panel.items.includes(key)) {
+      panel.items = panel.items.filter((k) => k !== key);
+    } else {
+      if (panel.items.length >= MAX_ITEMS) {
+        fail(new Error(`На одном графике не больше ${MAX_ITEMS} тегов и скриптов. ` +
+          'Начните новый график.'));
+        return;
+      }
+      if (key[0] === 't' && !tagIds().includes(idOf(key)) && tagIds().length >= MAX_TAGS) {
+        fail(new Error(`На странице не больше ${MAX_TAGS} тегов. Уберите лишние.`));
+        return;
+      }
+      panel.items = [...panel.items, key];
+      colorOf(key);
+    }
+    changed();
+  }
+
+  // --- графики --------------------------------------------------------------------
+  function renderPanels() {
+    for (const v of views) v.destroy();
+    views = state.panels.map((panel, i) => {
+      const trend = new Trend(panelsBox, {
+        title: `График ${i + 1}`,
+        fixed: panel.fixed,
+        empty: 'Пустой график. Выберите теги в списке слева.',
+        onActivate: () => activate(i),
+        onTimeZoom: (from, to) => zoomTo(from, to),
+        onReset: () => goBack(),
+        onRemove: (spec) => {
+          panel.items = panel.items.filter((k) => k !== spec.item);
+          changed();
+        },
+        onScales: (fixed) => {
+          panel.fixed = fixed;
+          save();
+        },
+      });
+      if (state.panels.length > 1) {
+        trend.addTool(el('button', { class: 'link quiet', type: 'button',
+          onclick: () => removePanel(i) }, 'Убрать график'));
+      }
+      trend.node.classList.toggle('active', i === state.active);
+      return trend;
+    });
+    addPanel.disabled = state.panels.length >= MAX_PANELS;
+    if (tagData.size || scriptData.size) draw();
+  }
+
+  function activate(i) {
+    if (state.active === i) return;
+    state.active = i;
+    views.forEach((v, k) => v.node.classList.toggle('active', k === i));
+    save();
+    drawPicker();
+  }
+
+  function newPanel() {
+    state.panels.push({ items: [], fixed: {} });
+    state.active = state.panels.length - 1;
+    changed();
+    views[state.active].node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  function removePanel(i) {
+    state.panels.splice(i, 1);
+    state.active = Math.min(state.active > i ? state.active - 1 : state.active,
+      state.panels.length - 1);
+    changed();
+  }
+
+  function merge() {
+    const items = allItems();
+    if (items.length > MAX_ITEMS) {
+      fail(new Error(`На один график помещается ${MAX_ITEMS} тегов и скриптов — ` +
+        'положил первые.'));
+    }
+    state.panels = [{ items: items.slice(0, MAX_ITEMS), fixed: {} }];
+    state.active = 0;
+    changed();
+  }
+
+  function split() {
+    const items = allItems().slice(0, MAX_PANELS);
+    state.panels = items.length ? items.map((k) => ({ items: [k], fixed: {} }))
+      : [{ items: [], fixed: {} }];
+    state.active = 0;
+    changed();
+  }
+
+  async function load(quiet = false) {
+    if (loading) {
+      // Период сменился, пока шла прежняя загрузка: повторим сразу после неё
+      again = true;
+      return;
+    }
+    loading = true;
+    const [from, to] = period();
+    const ids = tagIds();
+    const sids = scriptIds();
+    try {
+      const series = ids.length
+        ? get(`/series?${new URLSearchParams({ ids: ids.join(','), from: iso(from), to: iso(to),
+          points: 900 })}`)
+        : Promise.resolve({ tags: [] });
+      // Автообновление пересчитывает скрипты не чаще раза в 30 с: на длинных периодах
+      // это заметная работа для приложения
+      const fresh = !quiet || Date.now() - scriptsAt > 30000
+        || sids.some((id) => !scriptData.has(id));
+      const runs = sids.map((id) => (fresh ? post(`/scripts/${id}/run`, {
+        from: iso(from), to: iso(to), points: 900, tz: new Date().getTimezoneOffset(),
+      }).then((r) => ({ ok: true, r }), (error) => ({ ok: false, error }))
+        : Promise.resolve(scriptData.get(id))));
+      const [data, ...done] = await Promise.all([series, ...runs]);
+      tagData = new Map(data.tags.map((t) => [t.tag_id, t]));
+      for (const t of data.tags) tagInfo.set(t.tag_id, t);
+      scriptData = new Map(sids.map((id, i) => [id, done[i]]));
+      if (fresh) scriptsAt = Date.now();
+      state.shown = [from, to];
+      draw();
+      grafanaLink();
+    } catch (error) {
+      if (!quiet) fail(error);
+    } finally {
+      loading = false;
+      if (again) {
+        again = false;
+        load();
+      }
+    }
+  }
+
+  function scriptName(id) {
+    const done = scriptData.get(id);
+    if (done && done.ok) return done.r.name;
+    const s = scriptList.find((x) => x.script_id === id);
+    return s ? s.name : `№ ${id}`;
+  }
+
+  function draw() {
+    const window = state.shown || period();
+    state.panels.forEach((panel, i) => {
+      const trend = views[i];
+      if (!trend) return;
+      const specs = [];
+      const notes = [];
+      clear(trend.extra);
+      for (const key of panel.items) {
+        if (key[0] === 't') {
+          const tag = tagData.get(idOf(key));
+          if (!tag) {
+            notes.push({ text: `Тег № ${idOf(key)} не найден в базе`, item: key });
+            continue;
+          }
+          if (tag.datatype === 'string') {
+            const last = tag.quality === 0 ? (tag.text ?? '—') : 'плохое качество';
+            notes.push({ text: `${tag.name}: ${last} (текстовый тег, изменения — под графиком)`,
+              item: key, plain: true });
+            trend.extra.append(textTable(tag));
+            continue;
+          }
+          const bool = tag.datatype === 'bool';
+          const pts = tag.points;
+          specs.push({
+            key, item: key, label: tag.name,
+            title: [tag.description, tag.unit].filter(Boolean).join(', '),
+            color: PENS[colorOf(key)], unit: tag.unit || '', bool,
+            scale: tag.unit ? `u:${tag.unit}` : `src:${tag.name}`, kind: 'line',
+            t: pts.map((p) => p[0]), v: pts.map((p) => (bool ? p[4] : p[1])),
+            lo: bool ? null : pts.map((p) => p[2]), hi: bool ? null : pts.map((p) => p[3]),
+          });
+          continue;
+        }
+        const done = scriptData.get(idOf(key));
+        const name = scriptName(idOf(key));
+        if (!done) continue;
+        if (!done.ok) {
+          notes.push({ text: `Скрипт «${name}»: ${done.error.message}`, item: key });
+          continue;
+        }
+        done.r.outputs.forEach((out, k) => {
+          // События (пики) рисуем цветом своего тега; шкала у ряда из тега — та же,
+          // что у тега (по единице или по имени тега)
+          const base = out.kind === 'events' && out.source && panel.items.find((it) => it[0] === 't'
+            && tagData.get(idOf(it)) && tagData.get(idOf(it)).name === out.source);
+          specs.push({
+            key: `${key}:${k}`, item: key, label: out.name,
+            title: `Скрипт «${name}»: ${out.name}`,
+            color: PENS[base ? colorOf(base) : (colorOf(key) + k) % PENS.length],
+            unit: out.unit || '', bool: out.logical,
+            scale: out.unit ? `u:${out.unit}` : out.source ? `src:${out.source}` : `own:${key}:${k}`,
+            kind: out.kind === 'events' ? 'events' : 'line', t: out.t, v: out.v, count: out.count,
+          });
+        });
+        if (done.r.text.length) {
+          trend.extra.append(el('pre', { class: 'output' },
+            done.r.text.map((line) => `${name}: ${line}`).join('\n')));
+        }
+      }
+      trend.update(specs, window, notes);
+    });
+  }
+
+  function textTable(tag) {
+    return el('div', {},
+      el('p', { class: 'hint', style: 'margin:8px 0 4px' }, `${tag.name}: изменения за период`),
+      tag.changes.length
+        ? el('div', { class: 'table-wrap' }, el('table', {},
+          el('thead', {}, el('tr', {}, el('th', {}, 'Время'), el('th', {}, 'Значение'))),
+          el('tbody', {}, tag.changes.map(([ts, text, q]) => el('tr', {},
+            el('td', { class: 'num', style: 'width:190px' }, dateTime(ts)),
+            el('td', { class: q ? 'bad-q' : '' }, q ? 'плохое качество' : (text ?? '—')))))))
+        : el('p', { class: 'muted' }, 'За этот период изменений нет'));
+  }
+
+  // --- период -----------------------------------------------------------------------
+  function period() {
+    if (state.range === 'custom') return [state.from, state.to];
+    const span = (RANGES.find((r) => r[0] === state.range) || RANGES[1])[2];
+    const now = Date.now() / 1000;
+    return [now - span, now];
+  }
+
+  function drawPeriod() {
+    clear(segs);
+    for (const [key, label] of RANGES) {
+      segs.append(el('button', { class: `seg small${state.range === key ? ' on' : ''}`,
+        type: 'button', onclick: () => setRange(key) }, label));
+    }
+    const [from, to] = period();
+    fromInput.value = localInput(from);
+    toInput.value = localInput(to);
+    back.hidden = !state.back.length;
+  }
+
+  function setRange(key) {
+    state.back = [];
+    state.range = key;
+    drawPeriod();
+    save();
+    load();
+  }
+
+  function pushBack() {
+    state.back.push({ range: state.range, from: state.from, to: state.to });
+    if (state.back.length > 30) state.back.shift();
+  }
+
+  function zoomTo(from, to) {
+    if (!(to - from >= 1)) return;
+    pushBack();
+    state.range = 'custom';
+    state.from = from;
+    state.to = to;
+    drawPeriod();
+    save();
+    load();
+  }
+
+  function goBack() {
+    const prev = state.back.pop();
+    if (!prev) return;
+    Object.assign(state, prev);
+    drawPeriod();
+    save();
+    load();
+  }
+
+  function custom() {
+    const from = fromInput.value ? new Date(fromInput.value).getTime() / 1000 : null;
+    const to = toInput.value ? new Date(toInput.value).getTime() / 1000 : Date.now() / 1000;
+    if (!from || from >= to) {
+      fail(new Error('Начало периода должно быть раньше конца'));
+      return;
+    }
+    zoomTo(from, to);
+  }
+
+  // --- выгрузка и Grafana -------------------------------------------------------------
+  function exportCsv() {
+    const ids = tagIds();
+    if (!ids.length) {
+      fail(new Error('На графиках нет тегов — выгружать нечего'));
+      return;
+    }
+    const [from, to] = period();
+    const query = new URLSearchParams({ ids: ids.join(','), from: iso(from), to: iso(to),
+      tz: String(new Date().getTimezoneOffset()) });
+    const link = el('a', { href: `/api/export?${query}`, download: '' });
+    document.body.append(link);
+    link.click();
+    link.remove();
+  }
+
+  function grafanaLink() {
+    const query = new URLSearchParams();
+    for (const id of tagIds()) {
+      const info = tagInfo.get(id);
+      if (info) query.append('var-tag', info.name);
+    }
+    if (state.range === 'custom') {
+      query.set('from', String(Math.round(state.from * 1000)));
+      query.set('to', String(Math.round(state.to * 1000)));
+    } else {
+      query.set('from', `now-${state.range}`);
+      query.set('to', 'now');
+    }
+    grafana.href = `${grafanaBase(shared.info)}/d/historian-tags/?${query}`;
+  }
+
+  // --- запуск ---------------------------------------------------------------------------
+  search.addEventListener('input', debounce(find, 300));
+  auto.addEventListener('change', save);
+  try {
+    scriptList = (await get('/scripts')).items;
+  } catch { /* список скриптов подтянется при переключении вкладки */ }
+  drawPeriod();
+  renderPanels();
+  setTab(state.tab);
+  await load();
+  save();
+  timer = setInterval(() => {
+    if (state.range !== 'custom' && auto.checked && !document.hidden) load(true);
+  }, 5000);
+
+  return {
+    reuse: () => false,
+    destroy() {
+      clearInterval(timer);
+      for (const v of views) v.destroy();
+    },
+  };
+}
