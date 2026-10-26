@@ -195,6 +195,11 @@ def test_friendly_errors_for_beginners(code, message):
     assert message in str(err.value)
 
 
+def test_minus_sign_from_output_is_a_minus():
+    res = run('t = tag("T")\nprint(max(t − 1) == max(t) − 1)', T=wave())
+    assert res["text"] == ["да"]
+
+
 def test_missing_tag_error_has_line():
     with pytest.raises(ScriptError) as err:
         Program('x = 1\ny = tag("нет такого")').execute(

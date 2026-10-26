@@ -32,6 +32,7 @@ BATCH = 100                         # тегов в одном запросе к
 TAG_REFRESH_S = 600                 # как часто перечитывать список тегов
 RESWEEP = (600, 900)                # раз в 10 мин перечитать последние 15 мин
 MAX_BACKOFF_S = 300                 # пауза после ошибки растёт до 5 минут
+CYCLES_S = 900                      # опросы за последние 15 мин для ленты на странице
 
 
 def utcnow() -> datetime:
@@ -48,6 +49,7 @@ class Copier:
         self.clock = clock
         self.config: dict[str, Any] = {}
         self.events: deque[dict[str, Any]] = deque(maxlen=60)
+        self.cycles: deque[dict[str, Any]] = deque(maxlen=1000)   # каждый опрос историка
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
         self._reset_state()
@@ -118,6 +120,8 @@ class Copier:
             "progress": self.progress, "last_error": self.last_error,
             "errors": self.errors, "cycle_s": self.cycle_s,
             "poll_s": self.config.get("poll_s"), "events": list(self.events),
+            "cycles": [c for c in self.cycles if c["ts"] >= time.time() - CYCLES_S],
+            "now": round(time.time(), 1),       # часы сервера: лента не зависит от часов браузера
         }
 
     # ------------------------------------------------------------ цикл работы
@@ -127,8 +131,11 @@ class Copier:
         while not self._stop.is_set():
             try:
                 started = time.monotonic()
+                before = self.rows_copied
                 await self.cycle()
                 self.cycle_s = round(time.monotonic() - started, 2)
+                self.cycles.append({"ts": round(time.time(), 1), "s": self.cycle_s,
+                                    "rows": self.rows_copied - before})
                 backoff = 5.0
                 if failing:
                     self.event("ok", "Связь с историком восстановлена")
@@ -144,6 +151,7 @@ class Copier:
                 if not isinstance(exc, HistorianError):
                     log.exception("ошибка копирования")
                 self.event("error", f"{self.last_error} — повтор через {backoff:.0f} с")
+                self.cycles.append({"ts": round(time.time(), 1), "error": True})
                 failing = True
                 await self._drop_historian()
                 delay, backoff = backoff, min(backoff * 2, MAX_BACKOFF_S)

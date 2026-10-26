@@ -243,7 +243,13 @@ function html(content, images) {
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="../#/scripts">historian2grafana</a>
+    <a class="brand" href="../#/scripts">
+      <svg viewBox="0 0 24 24" class="brand-mark" aria-hidden="true">
+        <path d="M2 15h3l2-7 3 11 3-14 3 10 2-4h4" fill="none" stroke="currentColor"
+              stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      historian2grafana
+    </a>
     <nav class="nav"><a href="../#/scripts">Вернуться к скриптам</a></nav>
   </header>
   <main class="guide">

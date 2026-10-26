@@ -317,7 +317,7 @@ _COMPARE = {ast.Gt: operator.gt, ast.GtE: operator.ge, ast.Lt: operator.lt,
 
 
 _QUOTES = "«»“”„‘’‚"
-_DASHES = "–—−"
+_DASHES = "–—"
 
 
 def _syntax(exc: SyntaxError) -> str:
@@ -368,7 +368,8 @@ class Program:
             raise ScriptError(f"скрипт длиннее {MAX_CODE} символов")
         self.code = code
         try:
-            self.tree = ast.parse(code, mode="exec")
+            # Минус «−» из вывода print — тот же минус, его можно скопировать в скрипт
+            self.tree = ast.parse(code.replace("−", "-"), mode="exec")
         except SyntaxError as exc:
             raise ScriptError(_syntax(exc), exc.lineno) from None
         if len(self.tree.body) > MAX_STATEMENTS:

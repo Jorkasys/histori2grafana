@@ -143,11 +143,13 @@ def test_api_flow(tmp_path, test_settings):
         assert status["running"] is True
         for _ in range(100):
             state = client.get("/api/status").json()
-            if state["copy"]["state"] == "live" and state["db"]["rows"]:
+            if state["copy"]["state"] == "live" and state["db"]["rows"] and state["copy"]["cycles"]:
                 break
             time.sleep(0.1)
         assert state["copy"]["state"] == "live", state["copy"]
         assert state["db"]["tags_active"] == 5 and state["db"]["rows"] > 100
+        first = state["copy"]["cycles"][0]                # лента опросов на странице
+        assert first["rows"] > 100 and first["s"] >= 0 and "error" not in first
 
         tags = client.get("/api/tags", params={"q": "темпер"}).json()
         assert tags["total"] == 1 and tags["items"][0]["name"] == "Line1_Temp"

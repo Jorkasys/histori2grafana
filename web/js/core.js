@@ -31,7 +31,12 @@ export async function api(path, options = {}) {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(opts.body);
   }
-  const response = await fetch(`/api${path}`, opts);
+  let response;
+  try {
+    response = await fetch(`/api${path}`, opts);
+  } catch {
+    throw new Error('Нет связи с приложением. Проверьте, что оно запущено, и повторите');
+  }
   const text = await response.text();
   let data = null;
   if (text) {
@@ -82,39 +87,109 @@ export function saveCsv(name, header, rows) {
   setTimeout(() => { URL.revokeObjectURL(link.href); link.remove(); }, 1000);
 }
 
+// --- значки: тонкие линии, как перо самописца ----------------------------------
+const ICONS = {
+  check: 'M3 8.5l3.2 3.2L13 4.5',
+  cross: 'M4 4l8 8M12 4l-8 8',
+};
+
+export function icon(name, cls = 'icon') {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 16 16');
+  svg.setAttribute('class', cls);
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS(ns, 'path');
+  path.setAttribute('d', ICONS[name]);
+  svg.append(path);
+  return svg;
+}
+
 // --- уведомления и окна ----------------------------------------------------
-export function toast(message, kind = 'info', ms = 4500) {
-  const node = el('div', { class: `toast ${kind}` }, message);
+// action: { label, run } — кнопка в уведомлении, например «Вернуть как было»
+export function toast(message, kind = 'info', ms = 5000, action = null) {
+  const node = el('div', { class: `toast ${kind}`, role: kind === 'bad' ? 'alert' : null });
+  const close = () => node.remove();
+  node.append(el('span', { class: 'toast-text' }, message),
+    action ? el('button', { class: 'link', type: 'button',
+      onclick: () => { close(); action.run(); } }, action.label) : null,
+    el('button', { class: 'toast-close', type: 'button', 'aria-label': 'Закрыть уведомление',
+      onclick: close }, icon('cross')));
   document.getElementById('toasts').append(node);
-  setTimeout(() => node.remove(), ms);
+  // Пока над уведомлением мышь или фокус, оно не исчезает
+  let timer = setTimeout(close, ms);
+  const hold = () => clearTimeout(timer);
+  const release = () => { clearTimeout(timer); timer = setTimeout(close, 2500); };
+  node.addEventListener('mouseenter', hold);
+  node.addEventListener('focusin', hold);
+  node.addEventListener('mouseleave', release);
+  node.addEventListener('focusout', release);
 }
 
 export function fail(error) {
   console.error(error);
-  toast(error && error.message ? error.message : String(error), 'bad', 8000);
+  toast(error && error.message ? error.message : String(error), 'bad', 10000);
 }
 
+// Окно подтверждения. Фокус не уходит за окно, после закрытия возвращается
+// на кнопку, которая окно открыла. message — строка или список строк и узлов
 export function confirmDialog(title, message, action = 'Подтвердить') {
   return new Promise((resolve) => {
     const root = document.getElementById('modal-root');
-    const onKey = (e) => { if (e.key === 'Escape') close(false); };
-    const close = (value) => {
-      document.removeEventListener('keydown', onKey);
-      backdrop.remove();
-      resolve(value);
+    const opener = document.activeElement;
+    const id = `dialog-${Date.now()}`;
+    const cancel = el('button', { type: 'button', onclick: () => close(false) }, 'Отмена');
+    const ok = el('button', { class: 'danger', type: 'button', onclick: () => close(true) }, action);
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close(false);
+      } else if (e.key === 'Tab') {
+        e.preventDefault();
+        if (document.activeElement === cancel) ok.focus();
+        else cancel.focus();
+      }
     };
-    const cancel = el('button', { onclick: () => close(false) }, 'Отмена');
     const backdrop = el('div', { class: 'modal-backdrop', onclick: (e) => {
       if (e.target === backdrop) close(false);
-    } }, el('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true' },
-      el('h2', {}, title),
-      el('p', { class: 'hint' }, message),
-      el('div', { class: 'row', style: 'justify-content:flex-end;margin-top:18px' },
-        cancel,
-        el('button', { class: 'danger', onclick: () => close(true) }, action))));
+    } }, el('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true',
+      'aria-labelledby': `${id}-title`, 'aria-describedby': `${id}-text` },
+    el('h2', { id: `${id}-title` }, title),
+    el('div', { class: 'modal-text', id: `${id}-text` }, message),
+    el('div', { class: 'row', style: 'justify-content:flex-end;margin-top:18px' }, cancel, ok)));
+    function close(value) {
+      document.removeEventListener('keydown', onKey, true);
+      backdrop.remove();
+      if (opener && opener.focus && document.contains(opener)) opener.focus();
+      resolve(value);
+    }
     root.append(backdrop);
-    document.addEventListener('keydown', onKey);
+    document.addEventListener('keydown', onKey, true);
     cancel.focus();
+  });
+}
+
+// Перерисовка списка не должна сбрасывать фокус: возвращаем его на кнопку
+// с тем же data-key
+export function keepFocus(root, draw) {
+  const active = document.activeElement;
+  const key = active && root.contains(active) ? active.dataset.key : undefined;
+  draw();
+  if (key === undefined) return;
+  const node = root.querySelector(`[data-key="${CSS.escape(key)}"]`);
+  if (node) node.focus();
+}
+
+// Стрелки вверх и вниз переводят фокус между кнопками списка
+export function arrowKeys(root, selector) {
+  root.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    const items = [...root.querySelectorAll(selector)];
+    const i = items.indexOf(document.activeElement);
+    if (i < 0) return;
+    e.preventDefault();
+    const next = items[i + (e.key === 'ArrowDown' ? 1 : -1)];
+    if (next) next.focus();
   });
 }
 
@@ -128,6 +203,14 @@ export function num(value) {
 
 export function count(value) {
   return Number(value || 0).toLocaleString('ru-RU');
+}
+
+// «1 тег», «3 тега», «5 тегов»: forms = ['тег', 'тега', 'тегов']
+export function plural(n, forms) {
+  const a = Math.abs(n) % 100;
+  const b = a % 10;
+  const form = a > 10 && a < 20 ? forms[2] : b === 1 ? forms[0] : b > 1 && b < 5 ? forms[1] : forms[2];
+  return `${count(n)} ${form}`;
 }
 
 export function ago(seconds) {
@@ -188,8 +271,41 @@ export function grafanaBase(info) {
   return `${location.protocol}//${location.hostname}:${port}`;
 }
 
-// Общее состояние: адрес Grafana, сохранённые настройки
-export const shared = { info: null, settings: null };
+// Отвечает ли Grafana. Без CORS ответ непрозрачный, но сам ответ значит, что она
+// запущена; отказ в соединении даёт ошибку
+export async function probeGrafana() {
+  const stop = new AbortController();
+  const timer = setTimeout(() => stop.abort(), 3000);
+  try {
+    await fetch(`${grafanaBase(shared.info)}/api/health`,
+      { mode: 'no-cors', cache: 'no-store', signal: stop.signal });
+    shared.grafana = true;
+  } catch {
+    shared.grafana = false;
+  } finally {
+    clearTimeout(timer);
+  }
+  return shared.grafana;
+}
+
+// Ссылка на Grafana: если та не отвечает, объясняем почему, вместо пустой вкладки
+export function guardGrafana(link) {
+  link.addEventListener('click', async (e) => {
+    if (shared.grafana !== false) return;
+    e.preventDefault();
+    if (await probeGrafana()) {
+      window.open(link.href, '_blank', 'noopener');
+      return;
+    }
+    toast(`Grafana не отвечает по адресу ${grafanaBase(shared.info)}. Она запускается вместе ` +
+      'с приложением: в комплекте без интернета — файлом start.bat, в Docker — контейнером ' +
+      'grafana. Если Grafana работает на другом компьютере, её адрес задаётся настройкой ' +
+      'GRAFANA_URL.', 'bad', 14000);
+  });
+}
+
+// Общее состояние: адрес Grafana и отвечает ли она, сохранённые настройки
+export const shared = { info: null, settings: null, grafana: null };
 
 // Поля поиска на всех страницах
 (() => {

@@ -1,8 +1,8 @@
 // Страница «Графики»: несколько графиков, на каждом теги и результаты скриптов.
 
 import {
-  RANGES, clear, dateTime, debounce, el, fail, get, grafanaBase, hashParams, post, recall,
-  remember, shared,
+  RANGES, arrowKeys, clear, count, dateTime, debounce, el, fail, get, grafanaBase, guardGrafana,
+  hashParams, keepFocus, plural, post, recall, remember, shared, toast,
 } from './core.js';
 import { PENS, Trend } from './trend.js';
 
@@ -73,50 +73,58 @@ export async function chartsPage(view) {
   let again = false;
   let scriptsAt = 0;
   let timer = null;
+  let tick = null;
+  const calm = matchMedia('(prefers-reduced-motion: reduce)');
+  // Живая лента: период до «сейчас» и включено обновление
+  const live = () => state.range !== 'custom' && auto.checked;
 
   // --- разметка ---------------------------------------------------------------
   const search = el('input', { type: 'search', placeholder: 'Поиск по имени или описанию',
-    'aria-label': 'Поиск' });
+    'aria-label': 'Поиск', 'aria-controls': 'pick-results' });
   const tabTags = el('button', { class: 'seg small', type: 'button',
     onclick: () => setTab('tags') }, 'Теги');
   const tabScripts = el('button', { class: 'seg small', type: 'button',
     onclick: () => setTab('scripts') }, 'Скрипты');
-  const pickHint = el('p', { class: 'hint' });
-  const results = el('div', { class: 'results' });
-  const segs = el('div', { class: 'segs' });
+  const pickHint = el('p', { class: 'hint', 'aria-live': 'polite' });
+  const results = el('div', { class: 'results', id: 'pick-results' });
+  const segs = el('div', { class: 'segs', role: 'group', 'aria-label': 'Период' });
   const fromInput = el('input', { type: 'datetime-local', 'aria-label': 'Начало периода' });
   const toInput = el('input', { type: 'datetime-local', 'aria-label': 'Конец периода' });
-  const back = el('button', { class: 'small', type: 'button', hidden: true,
-    onclick: () => goBack() }, 'Вернуть прежний период');
+  const back = el('button', { class: 'small back', type: 'button', onclick: () => goBack() },
+    'Вернуть прежний период');
+  // Поля «с … по» нужны только для своего периода: при готовых периодах они спрятаны
+  const customBox = el('span', { class: 'row custom-range', style: 'gap:6px' },
+    el('span', { class: 'muted' }, 'с'), fromInput,
+    el('span', { class: 'muted' }, 'по'), toInput,
+    el('button', { class: 'small', type: 'button', onclick: () => custom() }, 'Показать'), back);
+  let editing = false;          // нажата «свой», но период ещё не применён
   const auto = el('input', { type: 'checkbox', checked: state.auto });
+  const autoLabel = el('label', { class: 'check' }, auto, 'обновлять каждые 5 с');
   const panelsBox = el('div', {});
   const addPanel = el('button', { class: 'add-panel', type: 'button', onclick: () => newPanel() },
     'Новый график');
   const grafana = el('a', { class: 'btn small', target: '_blank', rel: 'noopener',
     title: 'Те же теги и период в Grafana, в новой вкладке' }, 'Открыть в Grafana');
+  guardGrafana(grafana);
 
   view.append(
     el('h1', {}, 'Графики'),
-    el('p', { class: 'lead' }, 'Значения тегов из базы приложения. На один график можно ' +
-      'положить несколько тегов: у каждой единицы измерения — своя шкала. Протяните мышью по ' +
-      'графику, чтобы увеличить время или значения; двойной щелчок — вернуть.'),
+    el('p', { class: 'lead' }, 'Протяните мышью по графику, чтобы увеличить участок: влево ' +
+      'или вправо — время, вверх или вниз — значения. Двойной щелчок возвращает.'),
     el('div', { class: 'charts-layout' },
       el('aside', { class: 'picker' },
         el('div', { class: 'segs' }, tabTags, tabScripts),
         search, pickHint, results),
       el('section', {},
-        el('div', { class: 'toolbar' }, segs,
-          el('span', { class: 'row', style: 'gap:6px' },
-            el('span', { class: 'muted' }, 'с'), fromInput,
-            el('span', { class: 'muted' }, 'по'), toInput,
-            el('button', { class: 'small', type: 'button', onclick: () => custom() }, 'Показать')),
-          back),
+        el('div', { class: 'toolbar' }, segs, customBox),
         el('div', { class: 'toolbar' },
-          el('button', { class: 'small', type: 'button', onclick: () => merge() },
-            'Все на один график'),
-          el('button', { class: 'small', type: 'button', onclick: () => split() },
-            'Каждый тег отдельно'),
-          el('label', { class: 'check' }, auto, 'обновлять каждые 5 с'),
+          el('span', { class: 'tool-group', role: 'group', 'aria-label': 'Раскладка' },
+            el('span', { class: 'muted' }, 'Раскладка:'),
+            el('button', { class: 'small', type: 'button', onclick: () => merge() },
+              'все на один график'),
+            el('button', { class: 'small', type: 'button', onclick: () => split() },
+              'каждый тег отдельно')),
+          autoLabel,
           el('span', { class: 'spacer' }),
           el('button', { class: 'small', type: 'button', onclick: () => exportCsv(),
             title: 'Все значения тегов с графиков за период, файл для Excel' }, 'Скачать CSV'),
@@ -167,13 +175,24 @@ export async function chartsPage(view) {
     save();
     tabTags.classList.toggle('on', tab === 'tags');
     tabScripts.classList.toggle('on', tab === 'scripts');
-    pickHint.textContent = tab === 'tags'
-      ? 'Щелчок кладёт тег на выделенный график (он отмечен синей чертой слева), повторный ' +
-        'щелчок убирает.'
-      : 'Сохранённые скрипты со страницы «Скрипты». Щелчок кладёт результат скрипта на ' +
-        'выделенный график.';
+    tabTags.setAttribute('aria-pressed', String(tab === 'tags'));
+    tabScripts.setAttribute('aria-pressed', String(tab === 'scripts'));
     search.placeholder = tab === 'tags' ? 'Поиск по имени или описанию' : 'Поиск скрипта';
     find();
+  }
+
+  function drawHint() {
+    const many = state.panels.length > 1;
+    const target = many ? 'на график с пометкой «сюда добавляются теги»' : 'на график';
+    if (state.panels[state.active].items.length >= MAX_ITEMS) {
+      pickHint.textContent = `На графике уже ${MAX_ITEMS} тегов и скриптов, больше не ` +
+        'поместится. Начните новый график кнопкой под графиками.';
+    } else {
+      pickHint.textContent = state.tab === 'tags'
+        ? `Щелчок кладёт тег ${target}, повторный щелчок убирает. Стрелки вверх и вниз ` +
+          'ходят по списку.'
+        : `Сохранённые скрипты со страницы «Скрипты». Щелчок кладёт результат скрипта ${target}.`;
+    }
   }
 
   async function find() {
@@ -197,36 +216,42 @@ export async function chartsPage(view) {
       style: active || other ? `--c:${PENS[colorOf(key)]}` : null });
   }
 
+  function pick(key, ...content) {
+    const on = state.panels[state.active].items.includes(key);
+    return el('button', { class: 'pick', type: 'button', dataset: { key },
+      'aria-pressed': String(on), onclick: () => toggle(key) }, mark(key), ...content);
+  }
+
   function drawPicker() {
-    clear(results);
-    if (state.tab === 'tags') {
-      for (const t of found) {
-        const key = `t:${t.tag_id}`;
-        results.append(el('button', { class: 'pick', type: 'button', onclick: () => toggle(key) },
-          mark(key),
-          el('span', {}, el('span', { class: 'name' }, t.name),
-            t.description ? el('span', { class: 'desc' }, t.description) : null)));
+    drawHint();
+    keepFocus(results, () => {
+      clear(results);
+      if (state.tab === 'tags') {
+        for (const t of found) {
+          results.append(pick(`t:${t.tag_id}`,
+            el('span', {}, el('span', { class: 'name' }, t.name),
+              t.description ? el('span', { class: 'desc' }, t.description) : null)));
+        }
+        if (!found.length) {
+          results.append(el('p', { class: 'muted' }, search.value ? 'Ничего не найдено. ' +
+            'Поиск идёт по части имени и по описанию тега.'
+            : 'Тегов пока нет: запустите копирование на странице «Копирование».'));
+        } else if (found.total > found.length) {
+          results.append(el('p', { class: 'muted' },
+            `Показаны первые ${count(found.length)} из ${count(found.total)}. Уточните поиск.`));
+        }
+        return;
       }
-      if (!found.length) {
-        results.append(el('p', { class: 'muted' },
-          search.value ? 'Ничего не найдено' : 'Тегов пока нет: запустите копирование'));
-      } else if (found.total > found.length) {
-        results.append(el('p', { class: 'muted' },
-          `Показаны первые ${found.length} из ${found.total}. Уточните поиск.`));
+      const q = search.value.trim().toLowerCase();
+      const list = scriptList.filter((s) => !q || s.name.toLowerCase().includes(q));
+      for (const s of list) {
+        results.append(pick(`s:${s.script_id}`, el('span', { class: 'name' }, s.name)));
       }
-      return;
-    }
-    const q = search.value.trim().toLowerCase();
-    const list = scriptList.filter((s) => !q || s.name.toLowerCase().includes(q));
-    for (const s of list) {
-      const key = `s:${s.script_id}`;
-      results.append(el('button', { class: 'pick', type: 'button', onclick: () => toggle(key) },
-        mark(key), el('span', { class: 'name' }, s.name)));
-    }
-    if (!list.length) {
-      results.append(el('p', { class: 'muted' }, q ? 'Ничего не найдено. ' : 'Скриптов пока нет. ',
-        el('a', { href: '#/scripts' }, 'Написать скрипт')));
-    }
+      if (!list.length) {
+        results.append(el('p', { class: 'muted' }, q ? 'Ничего не найдено. ' : 'Скриптов пока нет. ',
+          el('a', { href: '#/scripts' }, 'Написать скрипт')));
+      }
+    });
   }
 
   function toggle(key) {
@@ -236,7 +261,7 @@ export async function chartsPage(view) {
     } else {
       if (panel.items.length >= MAX_ITEMS) {
         fail(new Error(`На одном графике не больше ${MAX_ITEMS} тегов и скриптов. ` +
-          'Начните новый график.'));
+          'Начните новый график кнопкой под графиками.'));
         return;
       }
       if (key[0] === 't' && !tagIds().includes(idOf(key)) && tagIds().length >= MAX_TAGS) {
@@ -268,24 +293,37 @@ export async function chartsPage(view) {
           panel.fixed = fixed;
           save();
         },
+        live,
       });
       if (state.panels.length > 1) {
         trend.addTool(el('button', { class: 'link quiet', type: 'button',
           onclick: () => removePanel(i) }, 'Убрать график'));
       }
-      trend.node.classList.toggle('active', i === state.active);
+      trend.setActive(i === state.active, state.panels.length > 1);
       return trend;
     });
     addPanel.disabled = state.panels.length >= MAX_PANELS;
+    addPanel.textContent = addPanel.disabled ? `Новый график (не больше ${MAX_PANELS})`
+      : 'Новый график';
     if (tagData.size || scriptData.size) draw();
   }
 
   function activate(i) {
     if (state.active === i) return;
     state.active = i;
-    views.forEach((v, k) => v.node.classList.toggle('active', k === i));
+    views.forEach((v, k) => v.setActive(k === i, views.length > 1));
     save();
     drawPicker();
+  }
+
+  // Слияние и разделение меняют всю раскладку, поэтому их можно отменить
+  function undoable(text) {
+    const before = { panels: JSON.parse(JSON.stringify(state.panels)), active: state.active };
+    return () => toast(text, 'ok', 9000, { label: 'Вернуть как было', run: () => {
+      state.panels = before.panels;
+      state.active = before.active;
+      changed();
+    } });
   }
 
   function newPanel() {
@@ -304,21 +342,26 @@ export async function chartsPage(view) {
 
   function merge() {
     const items = allItems();
-    if (items.length > MAX_ITEMS) {
-      fail(new Error(`На один график помещается ${MAX_ITEMS} тегов и скриптов, ` +
-        'положил первые.'));
-    }
+    const notify = undoable(items.length > MAX_ITEMS
+      ? `На один график помещается ${MAX_ITEMS} тегов и скриптов, положены первые ${MAX_ITEMS}.`
+      : 'Все теги на одном графике.');
     state.panels = [{ items: items.slice(0, MAX_ITEMS), fixed: {} }];
     state.active = 0;
     changed();
+    notify();
   }
 
   function split() {
-    const items = allItems().slice(0, MAX_PANELS);
+    const all = allItems();
+    const items = all.slice(0, MAX_PANELS);
+    const notify = undoable(all.length > MAX_PANELS
+      ? `Графиков не больше ${MAX_PANELS}: отдельно положены первые ${MAX_PANELS} тегов.`
+      : 'Каждый тег на своём графике.');
     state.panels = items.length ? items.map((k) => ({ items: [k], fixed: {} }))
       : [{ items: [], fixed: {} }];
     state.active = 0;
     changed();
+    notify();
   }
 
   async function load(quiet = false) {
@@ -328,6 +371,7 @@ export async function chartsPage(view) {
       return;
     }
     loading = true;
+    if (!quiet) for (const v of views) v.setLoading(true);
     const [from, to] = period();
     const ids = tagIds();
     const sids = scriptIds();
@@ -354,6 +398,7 @@ export async function chartsPage(view) {
       grafanaLink();
     } catch (error) {
       if (!quiet) fail(error);
+      for (const v of views) v.setLoading(false, error.message);
     } finally {
       loading = false;
       if (again) {
@@ -455,18 +500,34 @@ export async function chartsPage(view) {
   }
 
   function drawPeriod() {
-    clear(segs);
-    for (const [key, label] of RANGES) {
-      segs.append(el('button', { class: `seg small${state.range === key ? ' on' : ''}`,
-        type: 'button', onclick: () => setRange(key) }, label));
-    }
+    keepFocus(segs, () => {
+      clear(segs);
+      for (const [key, label] of RANGES) {
+        const on = state.range === key && !editing;
+        segs.append(el('button', { class: `seg small${on ? ' on' : ''}`,
+          type: 'button', dataset: { key }, 'aria-pressed': String(on),
+          onclick: () => setRange(key) }, label));
+      }
+      // Свой период тоже виден в переключателе: он задаётся полями «с … по»
+      const own = state.range === 'custom' || editing;
+      segs.append(el('button', { class: `seg small${own ? ' on' : ''}`,
+        type: 'button', dataset: { key: 'custom' }, 'aria-pressed': String(own),
+        'aria-expanded': String(own), title: 'Задать начало и конец периода',
+        onclick: () => { editing = true; drawPeriod(); fromInput.focus(); } }, 'свой'));
+    });
+    customBox.hidden = !(state.range === 'custom' || editing);
     const [from, to] = period();
     fromInput.value = localInput(from);
     toInput.value = localInput(to);
-    back.hidden = !state.back.length;
+    // Кнопка возврата держит место, чтобы панель инструментов не прыгала
+    back.disabled = !state.back.length;
+    back.classList.toggle('waiting', !state.back.length);
+    auto.disabled = state.range === 'custom';
+    autoLabel.title = auto.disabled ? 'Свой период заканчивается в прошлом, обновлять нечего' : '';
   }
 
   function setRange(key) {
+    editing = false;
     state.back = [];
     state.range = key;
     drawPeriod();
@@ -481,6 +542,7 @@ export async function chartsPage(view) {
 
   function zoomTo(from, to) {
     if (!(to - from >= 1)) return;
+    editing = false;
     pushBack();
     state.range = 'custom';
     state.from = from;
@@ -493,6 +555,7 @@ export async function chartsPage(view) {
   function goBack() {
     const prev = state.back.pop();
     if (!prev) return;
+    editing = false;
     Object.assign(state, prev);
     drawPeriod();
     save();
@@ -523,6 +586,8 @@ export async function chartsPage(view) {
     document.body.append(link);
     link.click();
     link.remove();
+    toast(`Скачивается CSV: ${plural(ids.length, ['тег', 'тега', 'тегов'])} с ${dateTime(from, false)} по ` +
+      `${dateTime(to, false)}. Файл появится в загрузках браузера.`, 'ok');
   }
 
   function grafanaLink() {
@@ -543,6 +608,15 @@ export async function chartsPage(view) {
 
   // --- запуск ---------------------------------------------------------------------------
   search.addEventListener('input', debounce(find, 300));
+  search.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowDown') return;
+    const first = results.querySelector('.pick');
+    if (first) {
+      e.preventDefault();
+      first.focus();
+    }
+  });
+  arrowKeys(results, '.pick');
   auto.addEventListener('change', save);
   try {
     scriptList = (await get('/scripts')).items;
@@ -553,13 +627,21 @@ export async function chartsPage(view) {
   await load();
   save();
   timer = setInterval(() => {
-    if (state.range !== 'custom' && auto.checked && !document.hidden) load(true);
+    if (live() && !document.hidden) load(true);
   }, 5000);
+  // Лента пишет: окно времени сдвигается раз в секунду, данные приходят раз в 5 с.
+  // Если в системе просят меньше движения, окно сдвигается только вместе с данными
+  tick = setInterval(() => {
+    if (!live() || calm.matches || document.hidden || !state.shown) return;
+    state.shown = period();
+    for (const v of views) v.slide(state.shown);
+  }, 1000);
 
   return {
     reuse: () => false,
     destroy() {
       clearInterval(timer);
+      clearInterval(tick);
       for (const v of views) v.destroy();
     },
   };

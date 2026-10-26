@@ -12,7 +12,9 @@
 }
 .guide h3 { font-size: 16.5px; margin: 26px 0 8px; }
 .guide h4 { font-size: 15px; margin: 18px 0 6px; }
-.guide p, .guide li { line-height: 1.62; max-width: 78ch; }
+/* Длина строки в em, а не в ch: ch — ширина цифры «0», кириллица у́же, и в 78ch
+   входило до 105 знаков */
+.guide p, .guide li, .guide .note { line-height: 1.62; max-width: 38em; }
 .guide li { margin: 3px 0; }
 .guide code { font: 13px var(--code); background: #f1f4f2; padding: 1px 4px; border-radius: 2px; }
 .guide pre.output { margin: 10px 0 16px; overflow-x: auto; white-space: pre; }
@@ -23,7 +25,7 @@
 .guide figure img { display: block; max-width: 100%; height: auto; border: 1px solid var(--rule); }
 .guide figcaption { color: var(--ink-3); font-size: 13px; margin-top: 6px; }
 
-.guide-toc { margin: 20px 0 6px; padding: 12px 18px 14px; background: #f6f8f7; border-left: 3px solid var(--pen); }
+.guide-toc { margin: 20px 0 6px; padding: 12px 18px 14px; background: #f6f8f7; border: 1px solid var(--rule); border-radius: var(--r); }
 .guide-toc .side-title { margin: 0 0 6px; color: var(--ink-3); font-size: 13px; }
 .guide-toc ol { margin: 0; padding-left: 22px; columns: 2 280px; column-gap: 28px; }
 .guide-toc li { margin: 2px 0; break-inside: avoid; }

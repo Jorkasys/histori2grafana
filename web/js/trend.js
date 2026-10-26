@@ -3,11 +3,11 @@
 // (страница загрузит этот период подробнее), по вертикали диапазон значений,
 // рамкой и то и другое. Двойной щелчок возвращает масштаб.
 
-import { clear, dateTime, el, num } from './core.js';
+import { clear, dateTime, el, icon, num } from './core.js';
 
 export const PENS = ['#1f5aa6', '#c0392b', '#2e7d32', '#7b3fa0', '#b26a00', '#00838f',
   '#6d4c41', '#546e7a'];
-const AXIS = '#75808c';
+const AXIS = '#5f6b77';
 const GRID = '#d6e0dc';
 const MINOR = '#edf2f0';
 const FONT = '12px Bahnschrift, "Segoe UI", Arial, sans-serif';
@@ -86,7 +86,7 @@ function value(v, spec) {
 
 export class Trend {
   /**
-   * opts: { title, height, sync, empty, fixed,
+   * opts: { title, height, sync, empty, fixed, live() — лента пишет до «сейчас»,
    *         onTimeZoom(from, to), onReset(), onRemove(spec), onScales(fixed), onActivate() }
    *
    * Ряды (update): { key, label, title, color, unit, scale, kind: 'line' | 'events',
@@ -107,15 +107,19 @@ export class Trend {
     this.title = el('button', { class: 'trend-title', type: 'button',
       title: 'Сделать график выделенным: новые теги добавляются на него',
       onclick: () => this.opts.onActivate && this.opts.onActivate() }, opts.title || '');
+    this.flagBox = el('span', { class: 'trend-flag-box' });
+    this.spin = el('span', { class: 'spinner', hidden: true, role: 'status',
+      'aria-label': 'Загружаю значения' });
     this.time = el('span', { class: 'trend-time' });
-    this.tools = el('span', { class: 'trend-tools' },
-      el('button', { class: 'link', type: 'button', onclick: () => this.toggleScales() }, 'Шкала'));
+    this.scalesButton = el('button', { class: 'link', type: 'button', 'aria-expanded': 'false',
+      onclick: () => this.toggleScales() }, 'Шкала');
+    this.tools = el('span', { class: 'trend-tools' }, this.scalesButton);
     this.legend = el('div', { class: 'legend' });
     this.scalesBox = el('div', { class: 'scales', hidden: true });
-    this.body = el('div', { class: 'trend-body' });
+    this.body = el('div', { class: 'trend-body', role: 'img' });
     this.extra = el('div', { class: 'texts' });
     this.node = el('section', { class: 'trend' },
-      el('div', { class: 'trend-head' }, this.title, this.time, this.tools),
+      el('div', { class: 'trend-head' }, this.title, this.flagBox, this.spin, this.time, this.tools),
       this.legend, this.scalesBox, this.body, this.extra);
     this.node.addEventListener('mousedown', () => this.opts.onActivate && this.opts.onActivate());
     host.append(this.node);
@@ -131,6 +135,34 @@ export class Trend {
     this.title.textContent = text;
   }
 
+  // Выделенный график видно сразу: «сюда добавляются теги», у остальных кнопка
+  setActive(active, many) {
+    this.node.classList.toggle('active', active && many);
+    clear(this.flagBox);
+    if (!many) return;
+    this.flagBox.append(active
+      ? el('span', { class: 'trend-flag' }, 'сюда добавляются теги')
+      : el('button', { class: 'link trend-use', type: 'button',
+        onclick: () => this.opts.onActivate && this.opts.onActivate() }, 'Добавлять сюда'));
+  }
+
+  // error: загрузка не удалась — пишем причину на месте графика, если рисовать нечего
+  setLoading(on, error = null) {
+    this.spin.hidden = !on;
+    if (this.plot) return;
+    if (on) clear(this.body).append(el('div', { class: 'trend-empty' }, 'Загружаю значения…'));
+    else if (error) {
+      clear(this.body).append(el('div', { class: 'trend-empty bad' },
+        `Значения не загрузились: ${error}`));
+    }
+  }
+
+  // Живая лента: окно времени едет, данные те же
+  slide(window) {
+    this.window = window;
+    if (this.plot) this.plot.setScale('x', { min: window[0], max: window[1] });
+  }
+
   // --- данные -------------------------------------------------------------------
   update(specs, window, notes = []) {
     this.window = window;
@@ -138,6 +170,12 @@ export class Trend {
     this.notes = notes;
     this.scaleKeys = [];
     for (const s of specs) if (!this.scaleKeys.includes(s.scale)) this.scaleKeys.push(s.scale);
+    this.spin.hidden = true;
+    // Для экранного диктора: что нарисовано и за какой период
+    this.body.setAttribute('aria-label', specs.length
+      ? `${this.title.textContent || 'График'}: ${specs.map((s) => s.label).join(', ')}; ` +
+        `с ${dateTime(window[0], false)} по ${dateTime(window[1], false)}`
+      : this.opts.empty);
     if (!specs.length) {
       if (this.plot) this.plot.destroy();
       this.plot = null;
@@ -173,15 +211,23 @@ export class Trend {
     }];
     this.scaleKeys.forEach((key, i) => {
       const first = this.specs.find((s) => s.scale === key);
+      // Дискретный тег: только 0 и 1, без делений 0,5
+      const bool = this.specs.filter((s) => s.scale === key).every((s) => s.bool);
       scales[key] = {
-        range: (_u, min, max) => (this.fixed[key] ? [...this.fixed[key]] : autoRange(min, max)),
+        range: (_u, min, max) => (this.fixed[key] ? [...this.fixed[key]]
+          : bool ? [-0.25, 1.25] : autoRange(min, max)),
       };
-      axes.push({
+      const axis = {
         scale: key, side: i % 2 ? 1 : 3, font: FONT, values: valueTicks, size: axisSize,
         stroke: several ? first.color : AXIS,
         grid: { show: i === 0, stroke: GRID, width: 1 },
         ticks: { stroke: GRID, width: 1, size: 4 },
-      });
+      };
+      if (bool) {
+        axis.splits = () => [0, 1];
+        axis.values = (_u, splits) => splits.map(String);
+      }
+      axes.push(axis);
     });
     const series = [{}];
     const bands = [];
@@ -226,6 +272,7 @@ export class Trend {
         setSelect: [(u) => this.onSelect(u)],
         setCursor: [(u) => this.showValues(u.cursor.idx)],
         drawAxes: [(u) => this.drawMinor(u)],
+        draw: [(u) => this.drawPens(u)],
       },
     }, data, this.body);
   }
@@ -266,6 +313,7 @@ export class Trend {
 
   toggleScales() {
     this.scalesBox.hidden = !this.scalesBox.hidden;
+    this.scalesButton.setAttribute('aria-expanded', String(!this.scalesBox.hidden));
     if (!this.scalesBox.hidden) this.renderScales();
   }
 
@@ -283,10 +331,14 @@ export class Trend {
       const first = this.specs.find((s) => s.scale === key);
       const current = this.plot ? this.plot.scales[key] : {};
       const fixed = this.fixed[key];
+      const name = first.unit || first.label;
       const lo = el('input', { inputmode: 'decimal', value: fixed ? num(fixed[0]) : '',
-        placeholder: current && current.min !== undefined ? num(current.min) : 'авто' });
+        placeholder: 'авто', 'aria-label': `${name}: от` });
       const hi = el('input', { inputmode: 'decimal', value: fixed ? num(fixed[1]) : '',
-        placeholder: current && current.max !== undefined ? num(current.max) : 'авто' });
+        placeholder: 'авто', 'aria-label': `${name}: до` });
+      // Текущий автоматический диапазон пишем текстом: в подсказке поля его плохо видно
+      const now = !fixed && current && Number.isFinite(current.min) && Number.isFinite(current.max)
+        ? el('span', { class: 'muted' }, `сейчас ${num(current.min)} … ${num(current.max)}`) : null;
       const apply = () => {
         const a = parse(lo.value);
         const b = parse(hi.value);
@@ -299,9 +351,9 @@ export class Trend {
         input.addEventListener('change', apply);
         input.addEventListener('keydown', (e) => { if (e.key === 'Enter') apply(); });
       }
-      this.scalesBox.append(el('label', { style: `color:${first.color}` },
-        first.unit || first.label, el('span', { class: 'muted' }, 'от'), lo,
-        el('span', { class: 'muted' }, 'до'), hi));
+      this.scalesBox.append(el('div', { class: 'scale-row' },
+        el('span', { class: 'scale-name', style: `--c:${first.color}` }, name),
+        el('span', { class: 'muted' }, 'от'), lo, el('span', { class: 'muted' }, 'до'), hi, now));
     }
     this.scalesBox.append(
       el('button', { class: 'small', type: 'button', onclick: () => {
@@ -323,12 +375,14 @@ export class Trend {
       const item = el('span', { class: `lg${this.hidden.has(s.key) ? ' off' : ''}`,
         style: `--c:${s.color}` },
       el('i', { class: `lg-mark${s.kind === 'events' ? ' dot' : ''}` }),
-      el('span', { class: 'lg-name', title: `${s.title || s.label}\nЩелчок скрывает или показывает ряд`,
+      el('button', { class: 'lg-name', type: 'button', 'aria-pressed': String(!this.hidden.has(s.key)),
+        title: `${s.title || s.label}\nЩелчок скрывает или показывает ряд`,
         onclick: () => this.toggle(i) }, s.label),
       val,
       this.opts.onRemove && s.removable !== false
-        ? el('button', { class: 'link quiet', type: 'button', title: 'Убрать с графика',
-          'aria-label': `Убрать ${s.label}`, onclick: () => this.opts.onRemove(s) }, '×')
+        ? el('button', { class: 'lg-remove', type: 'button', title: 'Убрать с графика',
+          'aria-label': `Убрать ${s.label} с графика`, onclick: () => this.opts.onRemove(s) },
+        icon('cross'))
         : null);
       this.items.push({ node: item, val });
       this.legend.append(item);
@@ -338,8 +392,9 @@ export class Trend {
       const text = typeof note === 'string' ? note : note.text;
       this.legend.append(el('span', { class: `lg${note.plain ? '' : ' lg-err'}` }, text,
         note.item && this.opts.onRemove
-          ? el('button', { class: 'link quiet', type: 'button', title: 'Убрать с графика',
-            onclick: () => this.opts.onRemove(note) }, '×')
+          ? el('button', { class: 'lg-remove', type: 'button', title: 'Убрать с графика',
+            'aria-label': 'Убрать с графика', onclick: () => this.opts.onRemove(note) },
+          icon('cross'))
           : null));
     }
     this.showValues(null);
@@ -351,6 +406,7 @@ export class Trend {
     if (show) this.hidden.delete(s.key);
     else this.hidden.add(s.key);
     this.items[i].node.classList.toggle('off', !show);
+    this.items[i].node.querySelector('.lg-name').setAttribute('aria-pressed', String(show));
     if (!this.plot) return;
     const idx = this.index[i];
     this.plot.setSeries(idx, { show });
@@ -416,6 +472,33 @@ export class Trend {
     lines(u.axes[0], 'x', true);
     if (this.scaleKeys.length) lines(u.axes[1], this.scaleKeys[0], false);
     ctx.stroke();
+    ctx.restore();
+  }
+
+  // --- перья: на живой ленте у каждого ряда точка на последнем значении ------------
+  drawPens(u) {
+    if (!(this.opts.live && this.opts.live())) return;
+    const ctx = u.ctx;
+    const px = globalThis.devicePixelRatio || 1;
+    const r = 3.5 * px;
+    ctx.save();
+    this.specs.forEach((s, i) => {
+      if (s.kind === 'events' || this.hidden.has(s.key)) return;
+      const col = u.data[this.index[i]];
+      let j = col.length - 1;
+      while (j >= 0 && col[j] === undefined) j -= 1;
+      if (j < 0 || col[j] === null) return;
+      const x = u.valToPos(u.data[0][j], 'x', true);
+      const y = u.valToPos(col[j], s.scale, true);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = s.color;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5 * px;
+      ctx.fill();
+      ctx.stroke();
+    });
     ctx.restore();
   }
 

@@ -2,8 +2,8 @@
 // графике; сохранённый скрипт можно положить на любой график страницы «Графики».
 
 import {
-  RANGES, clear, confirmDialog, dateTime, debounce, del, el, fail, get, num, post, put, recall,
-  remember, saveCsv, toast,
+  RANGES, arrowKeys, clear, confirmDialog, dateTime, debounce, del, el, fail, get, keepFocus, num,
+  post, put, recall, remember, saveCsv, toast,
 } from './core.js';
 import { PENS, Trend } from './trend.js';
 
@@ -65,20 +65,24 @@ export async function scriptsPage(view) {
   const examples = el('ul', { class: 'script-list' });
   const nameInput = el('input', { placeholder: 'Например: пики температуры смесителя',
     'aria-label': 'Название скрипта' });
-  const btnSave = el('button', { class: 'primary', type: 'button', onclick: () => save() },
-    'Сохранить');
+  const btnSave = el('button', { type: 'button', onclick: () => save(),
+    title: 'Сохранить скрипт (Ctrl+S)' }, 'Сохранить');
   const btnDelete = el('button', { class: 'danger', type: 'button', onclick: () => remove() },
     'Удалить');
   const tagSearch = el('input', { type: 'search', placeholder: 'Вставить тег: начните вводить имя',
     'aria-label': 'Вставить тег в скрипт', autocomplete: 'off' });
-  const suggest = el('div', { class: 'suggest-list', hidden: true });
-  const segs = el('div', { class: 'segs' });
+  const suggest = el('div', { class: 'suggest-list', hidden: true, id: 'tag-suggest' });
+  tagSearch.setAttribute('aria-controls', 'tag-suggest');
+  const segs = el('div', { class: 'segs', role: 'group', 'aria-label': 'Период' });
   const gutter = el('pre', { class: 'gutter', 'aria-hidden': 'true' });
   const code = el('textarea', { spellcheck: 'false', autocomplete: 'off', autocapitalize: 'off',
-    'aria-label': 'Текст скрипта' });
+    'aria-label': 'Текст скрипта', 'aria-describedby': 'code-keys' });
+  const codeKeys = el('span', { class: 'sr-only', id: 'code-keys' }, 'Tab вставляет отступ. ' +
+    'Чтобы перейти к следующей кнопке, нажмите Esc, затем Tab. Ctrl+Enter выполняет скрипт, ' +
+    'Ctrl+S сохраняет.');
   const btnRun = el('button', { class: 'primary', type: 'button', onclick: () => run() },
     'Выполнить');
-  const runState = el('span', { class: 'muted' });
+  const runState = el('span', { class: 'muted', role: 'status' });
   const errorBox = el('div', {});
   const chartBox = el('div', {});
   const outputBox = el('div', {});
@@ -107,18 +111,20 @@ export async function scriptsPage(view) {
         el('div', { class: 'toolbar' },
           el('div', { class: 'suggest', style: 'flex:1;min-width:240px' }, tagSearch, suggest),
           segs),
-        el('div', { class: 'editor' }, gutter, code),
+        el('div', { class: 'editor' }, gutter, code), codeKeys,
         el('div', { class: 'toolbar', style: 'margin-top:12px' }, btnRun,
           el('span', { class: 'muted' }, 'или Ctrl+Enter'), runState),
-        errorBox, chartBox, outputBox, eventsBox,
-        el('details', { class: 'card', style: 'margin-top:12px' },
+        // Справка рядом с редактором, а не под результатами
+        el('details', { class: 'card reference-box' },
           el('summary', {}, 'Справка: что можно писать в скрипте'),
           el('p', { class: 'hint' }, 'Язык похож на Python. Строка без присваивания показывает ' +
-            'результат: ряд — на графике, число — в выводе. Комментарии — после #. Подробно, с ' +
-            'примерами и разбором ошибок — в ',
+            'результат: ряд — на графике, число — в выводе. Комментарии — после #. Дробные числа ' +
+            'в скрипте пишутся через точку (60.5), а вывод показывает их по-русски, с запятой. ' +
+            'Подробно, с примерами и разбором ошибок — в ',
           el('a', { href: 'help/scripts.html', target: '_blank', rel: 'noopener' },
             'руководстве для начинающих'), '.'),
-          reference))),
+          reference),
+        errorBox, chartBox, outputBox, eventsBox)),
   );
 
   // --- редактор ----------------------------------------------------------------
@@ -144,16 +150,29 @@ export async function scriptsPage(view) {
 
   code.addEventListener('input', () => { markDirty(); drawGutter(); });
   code.addEventListener('scroll', () => { gutter.scrollTop = code.scrollTop; });
+  let escaped = false;
   code.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       run();
-    } else if (e.key === 'Tab' && !e.shiftKey) {
+    } else if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.altKey) {
+      // Tab вставляет отступ; Esc, затем Tab — уйти из редактора к следующей кнопке
+      if (escaped) return;
       e.preventDefault();
       code.setRangeText('    ', code.selectionStart, code.selectionEnd, 'end');
       markDirty();
     }
+    escaped = e.key === 'Escape';
   });
+  // Ctrl+S сохраняет скрипт, а не страницу браузера
+  for (const node of [code, nameInput]) {
+    node.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'ы' || e.code === 'KeyS')) {
+        e.preventDefault();
+        save();
+      }
+    });
+  }
   nameInput.addEventListener('input', markDirty);
 
   // --- вставка тега ---------------------------------------------------------------
@@ -193,19 +212,54 @@ export async function scriptsPage(view) {
     if (e.key === 'Enter' && options.length && !suggest.hidden) {
       e.preventDefault();
       insertTag(options[0].name);
+    } else if (e.key === 'ArrowDown' && !suggest.hidden) {
+      // Стрелка вниз — в список вариантов, там стрелками и Enter
+      const first = suggest.querySelector('button');
+      if (first) {
+        e.preventDefault();
+        first.focus();
+      }
     } else if (e.key === 'Escape') {
       suggest.hidden = true;
     }
   });
-  tagSearch.addEventListener('blur', () => setTimeout(() => { suggest.hidden = true; }, 150));
+  arrowKeys(suggest, 'button');
+  suggest.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      suggest.hidden = true;
+      tagSearch.focus();
+    } else if (e.key === 'ArrowUp' && document.activeElement === suggest.querySelector('button')) {
+      tagSearch.focus();
+    }
+  });
+  // Список прячется, когда фокус ушёл и из поля, и из вариантов
+  const hideSoon = () => setTimeout(() => {
+    if (!suggest.contains(document.activeElement) && document.activeElement !== tagSearch) {
+      suggest.hidden = true;
+    }
+  }, 150);
+  tagSearch.addEventListener('blur', hideSoon);
+  suggest.addEventListener('focusout', hideSoon);
 
   // --- период ----------------------------------------------------------------------
   function drawPeriod() {
-    clear(segs);
-    for (const [key, label] of RANGES) {
-      segs.append(el('button', { class: `seg small${range === key ? ' on' : ''}`, type: 'button',
-        onclick: () => { range = key; keep(); drawPeriod(); } }, label));
-    }
+    keepFocus(segs, () => {
+      clear(segs);
+      for (const [key, label] of RANGES) {
+        segs.append(el('button', { class: `seg small${range === key ? ' on' : ''}`, type: 'button',
+          dataset: { key }, 'aria-pressed': String(range === key),
+          onclick: () => setRange(key) }, label));
+      }
+    });
+  }
+
+  // Новый период — результат сразу пересчитывается, как на странице «Графики»
+  function setRange(key) {
+    if (range === key) return;
+    range = key;
+    keep();
+    drawPeriod();
+    if (code.value.trim()) run();
   }
 
   function period() {
@@ -216,15 +270,18 @@ export async function scriptsPage(view) {
 
   // --- список скриптов ---------------------------------------------------------------
   function drawList() {
-    clear(savedList);
-    for (const s of list) {
-      savedList.append(el('li', {}, el('button', {
-        type: 'button', class: s.script_id === current.script_id ? 'on' : '',
-        onclick: () => open(s),
-      }, s.name)));
-    }
-    if (!list.length) savedList.append(el('li', { class: 'muted', style: 'padding:7px 4px' },
-      'Пока ни одного'));
+    keepFocus(savedList, () => {
+      clear(savedList);
+      for (const s of list) {
+        const on = s.script_id === current.script_id;
+        savedList.append(el('li', {}, el('button', {
+          type: 'button', class: on ? 'on' : '', dataset: { key: String(s.script_id) },
+          'aria-current': on ? 'true' : null, onclick: () => open(s),
+        }, s.name)));
+      }
+      if (!list.length) savedList.append(el('li', { class: 'muted', style: 'padding:7px 4px' },
+        'Пока ни одного'));
+    });
     clear(examples);
     for (const ex of EXAMPLES) {
       examples.append(el('li', {}, el('button', { type: 'button', onclick: () => example(ex) },
@@ -338,10 +395,12 @@ export async function scriptsPage(view) {
       runState.textContent = `Готово за ${result.elapsed_ms.toLocaleString('ru-RU')} мс`;
       showResult(result, [from, to]);
     } catch (error) {
-      runState.textContent = '';
+      // Старый результат рядом с ошибкой сбивает с толку: убираем его
+      clearResults();
       const line = (error.message.match(/^строка (\d+)/) || [])[1];
       drawGutter(line ? Number(line) : null);
-      errorBox.append(el('div', { class: 'note bad', style: 'margin-top:14px' }, error.message));
+      errorBox.append(el('div', { class: 'note bad', role: 'alert', style: 'margin-top:14px' },
+        error.message));
     } finally {
       btnRun.disabled = false;
     }
@@ -359,10 +418,12 @@ export async function scriptsPage(view) {
       lineOf.set(`o${k}`, colors[k]);
       if (out.source && !lineOf.has(out.source)) lineOf.set(out.source, colors[k]);
     });
+    // Пики без своей линии берут следующее свободное перо: первое — синее, а не красное,
+    // которое читается как авария
     let spare = lineOf.size;
     result.outputs.forEach((out, k) => {
       if (out.kind !== 'events') return;
-      colors[k] = (out.source && lineOf.get(out.source)) || PENS[(spare += 1) % PENS.length];
+      colors[k] = (out.source && lineOf.get(out.source)) || PENS[spare++ % PENS.length];
     });
     const specs = result.outputs.map((out, k) => ({
       key: `o${k}`, label: out.name, title: out.name, unit: out.unit || '', bool: out.logical,
@@ -417,7 +478,7 @@ export async function scriptsPage(view) {
       reference.append(el('div', {}, el('code', {}, h.signature), el('p', {}, h.text)));
     }
     reference.append(
-      el('div', {}, el('code', {}, '+  −  *  /  **'), el('p', {}, 'Арифметика с рядами и ' +
+      el('div', {}, el('code', {}, '+  -  *  /  **'), el('p', {}, 'Арифметика с рядами и ' +
         'числами. Ряды с разными моментами значений сводятся сами: значение держится до ' +
         'следующего изменения.')),
       el('div', {}, el('code', {}, '>  <  >=  <=  ==  !=  and  or  not'), el('p', {},
