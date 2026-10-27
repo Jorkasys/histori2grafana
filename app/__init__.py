@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 
-__version__ = "1.1.3"
+__version__ = "1.1.4"
 
 # Старые серверы SQL Server умеют только TLS 1.0/1.1 или подписывают
 # сертификат по SHA-1, и современный OpenSSL с ними не соединяется. Флаг

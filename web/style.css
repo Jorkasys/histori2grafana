@@ -434,9 +434,11 @@ td .desc { display: block; color: var(--ink-3); font-size: 12.5px; }
 @media (min-width: 901px) {
   .picker { position: sticky; top: 76px; }
 }
+/* На узком экране и при сильном увеличении список не нужен: у каждого графика есть
+   «Добавить тег», и графики начинаются сразу под периодом */
 @media (max-width: 900px) {
   .charts-layout { grid-template-columns: 1fr; gap: 18px; }
-  .picker .results { max-height: 38vh; }
+  .charts-layout > .picker { display: none; }
 }
 .pick {
   display: flex;
@@ -490,8 +492,6 @@ td .desc { display: block; color: var(--ink-3); font-size: 12.5px; }
 }
 .trend-title { font-weight: 600; font-size: 14px; cursor: pointer; background: none; border: 0; padding: 0; min-height: 0; color: var(--ink); }
 .trend-title:hover { background: none; color: var(--pen); }
-.trend-flag { color: var(--pen); font-size: 12.5px; }
-.trend-use { font-size: 12.5px; }
 .trend-head .spinner { align-self: center; }
 .trend-time { color: var(--ink-3); font-size: 13px; }
 .trend-tools { margin-left: auto; display: flex; gap: 14px; }
@@ -548,6 +548,13 @@ button.lg-remove:hover { background: var(--ground); color: var(--bad); }
 .u-select { background: rgba(31, 90, 166, .08); box-shadow: inset 0 0 0 1px rgba(31, 90, 166, .45); }
 
 .add-panel { width: 100%; justify-content: center; border-style: dashed; color: var(--ink-2); }
+
+/* «Добавить тег»: поиск прямо в графике, раскрывается под заголовком */
+.adder { padding: 8px 12px 10px; border-top: 1px solid var(--rule-soft); border-bottom: 1px solid var(--rule-soft); background: #fafbfa; }
+.adder-list { max-height: 260px; overflow: auto; margin-top: 6px; border-top: 1px solid var(--rule); scrollbar-width: thin; }
+.adder .hint { margin: 8px 0 0; }
+.adder .pick:focus-visible { outline-offset: -2px; }
+.period-error { color: var(--bad); font-size: 13px; flex-basis: 100%; }
 
 /* --- скрипты -------------------------------------------------------------- */
 .scripts-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 28px; align-items: start; }

@@ -2,9 +2,10 @@
 // графике; сохранённый скрипт можно положить на любой график страницы «Графики».
 
 import {
-  RANGES, arrowKeys, clear, confirmDialog, dateTime, debounce, del, el, fail, get, keepFocus, num,
+  arrowKeys, clear, confirmDialog, dateTime, debounce, del, el, fail, get, keepFocus, num,
   post, put, recall, remember, saveCsv, toast,
 } from './core.js';
+import { loadPeriod, periodPicker, savePeriod, spanOf } from './period.js';
 import { PENS, Trend } from './trend.js';
 
 const STORE = 'scripts';
@@ -57,7 +58,8 @@ export async function scriptsPage(view) {
   let help = [];
   let current = { script_id: null };
   let dirty = false;
-  let range = saved.range && RANGES.some((r) => r[0] === saved.range) ? saved.range : '6h';
+  // Период общий со страницей «Графики»: скрипт считается за то же окно времени
+  let span = loadPeriod(saved.range);
   let trend = null;
 
   // --- разметка ---------------------------------------------------------------
@@ -73,7 +75,8 @@ export async function scriptsPage(view) {
     'aria-label': 'Вставить тег в скрипт', autocomplete: 'off' });
   const suggest = el('div', { class: 'suggest-list', hidden: true, id: 'tag-suggest' });
   tagSearch.setAttribute('aria-controls', 'tag-suggest');
-  const segs = el('div', { class: 'segs', role: 'group', 'aria-label': 'Период' });
+  const picker = periodPicker({ get: () => span, onPreset: (key) => setPeriod({ range: key }),
+    onCustom: (from, to) => setPeriod({ range: 'custom', from, to }) });
   const gutter = el('pre', { class: 'gutter', 'aria-hidden': 'true' });
   const code = el('textarea', { spellcheck: 'false', autocomplete: 'off', autocapitalize: 'off',
     'aria-label': 'Текст скрипта', 'aria-describedby': 'code-keys' });
@@ -109,7 +112,7 @@ export async function scriptsPage(view) {
           el('div', { style: 'flex:1;min-width:240px' }, nameInput), btnSave, btnDelete),
         el('div', { class: 'toolbar' },
           el('div', { class: 'suggest', style: 'flex:1;min-width:240px' }, tagSearch, suggest),
-          segs),
+          picker.segs, picker.box),
         el('div', { class: 'editor' }, gutter, code),
         el('div', { class: 'toolbar', style: 'margin-top:12px' }, btnRun, runState),
         el('p', { class: 'editor-keys' }, codeKeys),
@@ -145,7 +148,7 @@ export async function scriptsPage(view) {
   }
 
   function keep() {
-    remember(STORE, { id: current.script_id, range,
+    remember(STORE, { id: current.script_id,
       draft: dirty ? { name: nameInput.value, code: code.value } : null });
   }
 
@@ -243,31 +246,18 @@ export async function scriptsPage(view) {
   suggest.addEventListener('focusout', hideSoon);
 
   // --- период ----------------------------------------------------------------------
-  function drawPeriod() {
-    keepFocus(segs, () => {
-      clear(segs);
-      for (const [key, label] of RANGES) {
-        segs.append(el('button', { class: `seg small${range === key ? ' on' : ''}`, type: 'button',
-          dataset: { key }, 'aria-pressed': String(range === key),
-          onclick: () => setRange(key) }, label));
-      }
-    });
-  }
+  const drawPeriod = () => picker.draw();
 
   // Новый период — результат сразу пересчитывается, как на странице «Графики»
-  function setRange(key) {
-    if (range === key) return;
-    range = key;
-    keep();
+  function setPeriod(next) {
+    if (next.range !== 'custom' && span.range === next.range) return;
+    span = { from: null, to: null, ...next };
+    savePeriod(span);
     drawPeriod();
     if (code.value.trim()) run();
   }
 
-  function period() {
-    const span = (RANGES.find((r) => r[0] === range) || RANGES[2])[2];
-    const now = Date.now() / 1000;
-    return [now - span, now];
-  }
+  const period = () => spanOf(span);
 
   // --- список скриптов ---------------------------------------------------------------
   function drawList() {

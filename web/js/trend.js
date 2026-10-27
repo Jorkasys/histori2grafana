@@ -105,9 +105,8 @@ export class Trend {
     this.scaleKeys = [];
 
     this.title = el('button', { class: 'trend-title', type: 'button',
-      title: 'Сделать график выделенным: новые теги добавляются на него',
+      title: 'Теги из списка слева будут ложиться на этот график',
       onclick: () => this.opts.onActivate && this.opts.onActivate() }, opts.title || '');
-    this.flagBox = el('span', { class: 'trend-flag-box' });
     this.spin = el('span', { class: 'spinner', hidden: true, role: 'status',
       'aria-label': 'Загружаю значения' });
     this.time = el('span', { class: 'trend-time' });
@@ -119,7 +118,7 @@ export class Trend {
     this.body = el('div', { class: 'trend-body', role: 'img' });
     this.extra = el('div', { class: 'texts' });
     this.node = el('section', { class: 'trend' },
-      el('div', { class: 'trend-head' }, this.title, this.flagBox, this.spin, this.time, this.tools),
+      el('div', { class: 'trend-head' }, this.title, this.spin, this.time, this.tools),
       this.legend, this.scalesBox, this.body, this.extra);
     this.node.addEventListener('mousedown', () => this.opts.onActivate && this.opts.onActivate());
     host.append(this.node);
@@ -135,15 +134,9 @@ export class Trend {
     this.title.textContent = text;
   }
 
-  // Выделенный график видно сразу: «сюда добавляются теги», у остальных кнопка
+  // Последний график, с которым работали, в синей рамке: на него кладёт список слева
   setActive(active, many) {
     this.node.classList.toggle('active', active && many);
-    clear(this.flagBox);
-    if (!many) return;
-    this.flagBox.append(active
-      ? el('span', { class: 'trend-flag' }, 'сюда добавляются теги')
-      : el('button', { class: 'link trend-use', type: 'button',
-        onclick: () => this.opts.onActivate && this.opts.onActivate() }, 'Добавлять сюда'));
   }
 
   // error: загрузка не удалась — пишем причину на месте графика, если рисовать нечего

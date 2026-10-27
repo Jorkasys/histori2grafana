@@ -4,18 +4,13 @@ import {
   RANGES, arrowKeys, clear, count, dateTime, debounce, el, fail, get, grafanaBase, guardGrafana,
   hashParams, keepFocus, plural, post, recall, remember, shared, toast,
 } from './core.js';
+import { loadPeriod, periodPicker, savePeriod, spanOf } from './period.js';
 import { PENS, Trend } from './trend.js';
 
 const MAX_PANELS = 8;
 const MAX_ITEMS = 8;          // тегов и скриптов на одном графике
 const MAX_TAGS = 20;          // разных тегов на странице, больше /api/series не отдаёт
 const STORE = 'charts.v2';
-
-function localInput(seconds) {
-  const d = new Date(seconds * 1000);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 
 const iso = (seconds) => new Date(seconds * 1000).toISOString();
 
@@ -37,12 +32,14 @@ const idOf = (key) => Number(key.split(':')[1]);
 export async function chartsPage(view) {
   const params = hashParams();
   const saved = recall(STORE, {});
+  // Период общий со страницей «Скрипты»; если он задан в адресе, берём из адреса
+  const shared = loadPeriod(saved.range);
   const state = {
     panels: [],
-    active: 0,
-    range: params.get('range') || saved.range || '1h',
-    from: Number(params.get('from')) || null,
-    to: Number(params.get('to')) || null,
+    active: 0,              // последний график, с которым работали: на него кладёт список слева
+    range: params.get('range') || shared.range,
+    from: Number(params.get('from')) || (params.get('range') ? null : shared.from),
+    to: Number(params.get('to')) || (params.get('range') ? null : shared.to),
     auto: saved.auto !== false,
     colors: saved.colors || {},
     tab: saved.tab || 'tags',
@@ -87,17 +84,11 @@ export async function chartsPage(view) {
     onclick: () => setTab('scripts') }, 'Скрипты');
   const pickHint = el('p', { class: 'hint', 'aria-live': 'polite' });
   const results = el('div', { class: 'results', id: 'pick-results' });
-  const segs = el('div', { class: 'segs', role: 'group', 'aria-label': 'Период' });
-  const fromInput = el('input', { type: 'datetime-local', 'aria-label': 'Начало периода' });
-  const toInput = el('input', { type: 'datetime-local', 'aria-label': 'Конец периода' });
   const back = el('button', { class: 'small back', type: 'button', onclick: () => goBack() },
     'Вернуть прежний период');
   // Поля «с … по» нужны только для своего периода: при готовых периодах они спрятаны
-  const customBox = el('span', { class: 'row custom-range', style: 'gap:6px' },
-    el('span', { class: 'muted' }, 'с'), fromInput,
-    el('span', { class: 'muted' }, 'по'), toInput,
-    el('button', { class: 'small', type: 'button', onclick: () => custom() }, 'Показать'), back);
-  let editing = false;          // нажата «свой», но период ещё не применён
+  const picker = periodPicker({ get: () => state, onPreset: (key) => setRange(key),
+    onCustom: (from, to) => zoomTo(from, to), tail: back });
   const auto = el('input', { type: 'checkbox', checked: state.auto });
   const autoLabel = el('label', { class: 'check' }, auto, 'обновлять каждые 5 с');
   const panelsBox = el('div', {});
@@ -116,7 +107,7 @@ export async function chartsPage(view) {
         el('div', { class: 'segs' }, tabTags, tabScripts),
         search, pickHint, results),
       el('section', {},
-        el('div', { class: 'toolbar' }, segs, autoLabel, customBox),
+        el('div', { class: 'toolbar' }, picker.segs, autoLabel, picker.box),
         el('div', { class: 'toolbar' },
           el('span', { class: 'tool-group', role: 'group', 'aria-label': 'Раскладка' },
             el('span', { class: 'muted' }, 'Раскладка:'),
@@ -149,9 +140,9 @@ export async function chartsPage(view) {
   function save() {
     const present = new Set(allItems());
     for (const key of Object.keys(state.colors)) if (!present.has(key)) delete state.colors[key];
-    remember(STORE, { panels: state.panels, active: state.active,
-      range: state.range === 'custom' ? '1h' : state.range, auto: auto.checked,
+    remember(STORE, { panels: state.panels, active: state.active, auto: auto.checked,
       colors: state.colors, tab: state.tab });
+    savePeriod({ range: state.range, from: state.from, to: state.to });
     const query = new URLSearchParams({ p: formatPanels(state.panels), range: state.range });
     if (state.range === 'custom') {
       query.set('from', String(Math.round(state.from)));
@@ -165,6 +156,14 @@ export async function chartsPage(view) {
     save();
     renderPanels();
     drawPicker();
+    load();
+  }
+
+  // Изменился состав одного графика: перерисовывать сами панели не нужно
+  function itemsChanged() {
+    save();
+    drawPicker();
+    drawAdder();
     load();
   }
 
@@ -182,15 +181,18 @@ export async function chartsPage(view) {
 
   function drawHint() {
     const many = state.panels.length > 1;
-    const target = many ? 'на график с пометкой «сюда добавляются теги»' : 'на график';
+    const what = state.tab === 'tags' ? 'тег' : 'результат скрипта';
     if (state.panels[state.active].items.length >= MAX_ITEMS) {
       pickHint.textContent = `На графике уже ${MAX_ITEMS} тегов и скриптов, больше не ` +
         'поместится. Начните новый график кнопкой под графиками.';
+    } else if (many) {
+      pickHint.textContent = `Щелчок кладёт ${what} на график в синей рамке, с которым вы ` +
+        'работали последним. На другой график — кнопка «Добавить тег» в его заголовке.';
     } else {
       pickHint.textContent = state.tab === 'tags'
-        ? `Щелчок кладёт тег ${target}, повторный щелчок убирает. Стрелки вверх и вниз ` +
+        ? 'Щелчок кладёт тег на график, повторный щелчок убирает. Стрелки вверх и вниз ' +
           'ходят по списку.'
-        : `Сохранённые скрипты со страницы «Скрипты». Щелчок кладёт результат скрипта ${target}.`;
+        : 'Сохранённые скрипты со страницы «Скрипты». Щелчок кладёт результат скрипта на график.';
     }
   }
 
@@ -208,29 +210,29 @@ export async function chartsPage(view) {
     } catch (error) { fail(error); }
   }
 
-  function mark(key) {
-    const active = state.panels[state.active].items.includes(key);
-    const other = !active && allItems().includes(key);
-    return el('i', { class: `mark${active ? ' on' : other ? ' other' : ''}`,
-      style: active || other ? `--c:${PENS[colorOf(key)]}` : null });
+  // Отметка тега: залита — на этом графике, косая черта — на другом
+  function mark(key, i = state.active) {
+    const here = state.panels[i].items.includes(key);
+    const other = !here && allItems().includes(key);
+    return el('i', { class: `mark${here ? ' on' : other ? ' other' : ''}`,
+      style: here || other ? `--c:${PENS[colorOf(key)]}` : null });
   }
 
-  function pick(key, ...content) {
-    const on = state.panels[state.active].items.includes(key);
+  function pick(key, i, ...content) {
+    const on = state.panels[i].items.includes(key);
     return el('button', { class: 'pick', type: 'button', dataset: { key },
-      'aria-pressed': String(on), onclick: () => toggle(key) }, mark(key), ...content);
+      'aria-pressed': String(on), onclick: () => toggle(key, i) }, mark(key, i), ...content);
   }
+
+  const tagLine = (t) => el('span', {}, el('span', { class: 'name' }, t.name),
+    t.description ? el('span', { class: 'desc' }, t.description) : null);
 
   function drawPicker() {
     drawHint();
     keepFocus(results, () => {
       clear(results);
       if (state.tab === 'tags') {
-        for (const t of found) {
-          results.append(pick(`t:${t.tag_id}`,
-            el('span', {}, el('span', { class: 'name' }, t.name),
-              t.description ? el('span', { class: 'desc' }, t.description) : null)));
-        }
+        for (const t of found) results.append(pick(`t:${t.tag_id}`, state.active, tagLine(t)));
         if (!found.length) {
           results.append(el('p', { class: 'muted' }, search.value ? 'Ничего не найдено. ' +
             'Поиск идёт по части имени и по описанию тега.'
@@ -244,7 +246,7 @@ export async function chartsPage(view) {
       const q = search.value.trim().toLowerCase();
       const list = scriptList.filter((s) => !q || s.name.toLowerCase().includes(q));
       for (const s of list) {
-        results.append(pick(`s:${s.script_id}`, el('span', { class: 'name' }, s.name)));
+        results.append(pick(`s:${s.script_id}`, state.active, el('span', { class: 'name' }, s.name)));
       }
       if (!list.length) {
         results.append(el('p', { class: 'muted' }, q ? 'Ничего не найдено. ' : 'Скриптов пока нет. ',
@@ -253,8 +255,9 @@ export async function chartsPage(view) {
     });
   }
 
-  function toggle(key) {
-    const panel = state.panels[state.active];
+  function toggle(key, i = state.active) {
+    activate(i);
+    const panel = state.panels[i];
     if (panel.items.includes(key)) {
       panel.items = panel.items.filter((k) => k !== key);
     } else {
@@ -270,17 +273,104 @@ export async function chartsPage(view) {
       panel.items = [...panel.items, key];
       colorOf(key);
     }
-    changed();
+    itemsChanged();
+  }
+
+  // --- «Добавить тег» в заголовке графика ---------------------------------------------
+  // Поиск тегов и скриптов прямо в графике: так тег ложится именно туда, куда нужно
+  let adder = null;               // { i, box, button, input, list, tags }
+
+  function outside(e) {
+    if (adder && !adder.box.contains(e.target) && !adder.button.contains(e.target)) closeAdder();
+  }
+
+  function closeAdder(focusBack = false) {
+    if (!adder) return;
+    const { box, button } = adder;
+    adder = null;
+    box.remove();
+    button.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('mousedown', outside, true);
+    if (focusBack) button.focus();
+  }
+
+  function openAdder(i, button) {
+    if (adder && adder.i === i) {
+      closeAdder(true);
+      return;
+    }
+    closeAdder();
+    activate(i);
+    const input = el('input', { type: 'search', placeholder: 'Тег или скрипт: начните вводить',
+      'aria-label': `Найти тег или скрипт для графика ${i + 1}` });
+    const list = el('div', { class: 'adder-list' });
+    const box = el('div', { class: 'adder' }, input, list,
+      el('p', { class: 'hint' }, 'Щелчок кладёт на этот график или убирает с него. Esc закрывает.'));
+    adder = { i, box, button, input, list, tags: [] };
+    views[i].node.insertBefore(box, views[i].legend);
+    button.setAttribute('aria-expanded', 'true');
+    input.addEventListener('input', debounce(fillAdder, 250));
+    input.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowDown') return;
+      const first = list.querySelector('.pick');
+      if (first) {
+        e.preventDefault();
+        first.focus();
+      }
+    });
+    box.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        closeAdder(true);
+      }
+    });
+    arrowKeys(list, '.pick');
+    document.addEventListener('mousedown', outside, true);
+    input.focus();
+    fillAdder();
+  }
+
+  async function fillAdder() {
+    const a = adder;
+    if (!a) return;
+    try {
+      const data = await get(`/tags?${new URLSearchParams({ q: a.input.value.trim(), limit: 30 })}`);
+      for (const t of data.items) tagInfo.set(t.tag_id, t);
+      a.tags = data.items;
+    } catch (error) {
+      fail(error);
+      return;
+    }
+    if (adder === a) drawAdder();
+  }
+
+  function drawAdder() {
+    const a = adder;
+    if (!a) return;
+    const q = a.input.value.trim().toLowerCase();
+    const scripts = scriptList.filter((s) => !q || s.name.toLowerCase().includes(q));
+    keepFocus(a.list, () => {
+      clear(a.list);
+      for (const t of a.tags) a.list.append(pick(`t:${t.tag_id}`, a.i, tagLine(t)));
+      for (const s of scripts) {
+        a.list.append(pick(`s:${s.script_id}`, a.i, el('span', {},
+          el('span', { class: 'name' }, s.name), el('span', { class: 'desc' }, 'скрипт'))));
+      }
+      if (!a.tags.length && !scripts.length) {
+        a.list.append(el('p', { class: 'muted' }, 'Ничего не найдено'));
+      }
+    });
   }
 
   // --- графики --------------------------------------------------------------------
   function renderPanels() {
+    closeAdder();
     for (const v of views) v.destroy();
     views = state.panels.map((panel, i) => {
       const trend = new Trend(panelsBox, {
         title: `График ${i + 1}`,
         fixed: panel.fixed,
-        empty: 'Пустой график. Выберите теги в списке слева.',
+        empty: 'Пустой график. Добавьте теги кнопкой «Добавить тег» в заголовке.',
         onActivate: () => activate(i),
         onTimeZoom: (from, to) => zoomTo(from, to),
         onReset: () => goBack(),
@@ -294,6 +384,8 @@ export async function chartsPage(view) {
         },
         live,
       });
+      trend.tools.prepend(el('button', { class: 'link', type: 'button', 'aria-expanded': 'false',
+        onclick: (e) => openAdder(i, e.currentTarget) }, 'Добавить тег'));
       if (state.panels.length > 1) {
         trend.addTool(el('button', { class: 'link quiet', type: 'button',
           onclick: () => removePanel(i) }, 'Убрать график'));
@@ -493,33 +585,10 @@ export async function chartsPage(view) {
   }
 
   // --- период -----------------------------------------------------------------------
-  function period() {
-    if (state.range === 'custom') return [state.from, state.to];
-    const span = (RANGES.find((r) => r[0] === state.range) || RANGES[1])[2];
-    const now = Date.now() / 1000;
-    return [now - span, now];
-  }
+  const period = () => spanOf(state);
 
   function drawPeriod() {
-    keepFocus(segs, () => {
-      clear(segs);
-      for (const [key, label] of RANGES) {
-        const on = state.range === key && !editing;
-        segs.append(el('button', { class: `seg small${on ? ' on' : ''}`,
-          type: 'button', dataset: { key }, 'aria-pressed': String(on),
-          onclick: () => setRange(key) }, label));
-      }
-      // Свой период тоже виден в переключателе: он задаётся полями «с … по»
-      const own = state.range === 'custom' || editing;
-      segs.append(el('button', { class: `seg small${own ? ' on' : ''}`,
-        type: 'button', dataset: { key: 'custom' }, 'aria-pressed': String(own),
-        'aria-expanded': String(own), title: 'Задать начало и конец периода',
-        onclick: () => { editing = true; drawPeriod(); fromInput.focus(); } }, 'свой'));
-    });
-    customBox.hidden = !(state.range === 'custom' || editing);
-    const [from, to] = period();
-    fromInput.value = localInput(from);
-    toInput.value = localInput(to);
+    picker.draw();
     // Кнопка возврата держит место, чтобы панель инструментов не прыгала
     back.disabled = !state.back.length;
     back.classList.toggle('waiting', !state.back.length);
@@ -528,7 +597,7 @@ export async function chartsPage(view) {
   }
 
   function setRange(key) {
-    editing = false;
+    picker.reset();
     state.back = [];
     state.range = key;
     drawPeriod();
@@ -543,7 +612,7 @@ export async function chartsPage(view) {
 
   function zoomTo(from, to) {
     if (!(to - from >= 1)) return;
-    editing = false;
+    picker.reset();
     pushBack();
     state.range = 'custom';
     state.from = from;
@@ -556,21 +625,11 @@ export async function chartsPage(view) {
   function goBack() {
     const prev = state.back.pop();
     if (!prev) return;
-    editing = false;
+    picker.reset();
     Object.assign(state, prev);
     drawPeriod();
     save();
     load();
-  }
-
-  function custom() {
-    const from = fromInput.value ? new Date(fromInput.value).getTime() / 1000 : null;
-    const to = toInput.value ? new Date(toInput.value).getTime() / 1000 : Date.now() / 1000;
-    if (!from || from >= to) {
-      fail(new Error('Начало периода должно быть раньше конца'));
-      return;
-    }
-    zoomTo(from, to);
   }
 
   // --- выгрузка и Grafana -------------------------------------------------------------
