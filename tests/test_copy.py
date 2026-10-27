@@ -153,6 +153,9 @@ def test_api_flow(tmp_path, test_settings):
 
         tags = client.get("/api/tags", params={"q": "темпер"}).json()
         assert tags["total"] == 1 and tags["items"][0]["name"] == "Line1_Temp"
+        # Регистр русских букв не важен и в базе без локали (комплект без интернета)
+        assert client.get("/api/tags", params={"q": "линия 1 — ТОК"}).json()["total"] == 1
+        assert client.get("/api/tags", params={"q": "line1_run"}).json()["total"] == 1
         temp_id = tags["items"][0]["tag_id"]
         recipe = client.get("/api/tags", params={"q": "Recipe"}).json()["items"][0]
 

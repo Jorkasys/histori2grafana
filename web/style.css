@@ -149,6 +149,7 @@ a:hover { color: var(--pen-dark); }
 @media (max-width: 600px) { .content { padding: 20px 16px 32px; } .footer { padding: 0 16px 24px; } }
 
 h1 { font-size: 22px; line-height: 1.25; margin: 0 0 6px; font-weight: 600; }
+h1[tabindex="-1"]:focus { outline: none; }
 .lead { color: var(--ink-2); margin: 0 0 22px; max-width: 74ch; }
 
 /* --- разделы страницы ----------------------------------------------------- */
@@ -289,6 +290,8 @@ button.seg.on { background: var(--pen-soft); border-color: var(--pen); color: va
 .protocol-head h2 { font-size: 16px; margin: 0 0 4px; }
 .protocol-head time { color: var(--ink-3); font-size: 13px; }
 .protocol .hint { color: var(--ink-2); }
+.protocol.stale .protocol-head, .protocol.stale .steps { opacity: .55; }
+.protocol .note { margin-bottom: 12px; }
 
 .steps { list-style: none; margin: 0; padding: 0; }
 .steps > li { padding: 10px 0; border-top: 1px solid var(--grid); }
@@ -339,7 +342,7 @@ button.seg.on { background: var(--pen-soft); border-color: var(--pen); color: va
 .tape-pen line { stroke: var(--pen); stroke-width: 1.5; }
 .tape-pen circle { fill: var(--pen); stroke: var(--paper); stroke-width: 1.5; }
 .tape-labels text { fill: var(--ink-3); font: 12px var(--font); }
-.tape-labels .tape-scale { fill: var(--ink-2); }
+.tape-labels .tape-scale { fill: var(--ink-2); paint-order: stroke; stroke: var(--paper); stroke-width: 4px; stroke-linejoin: round; }
 .tape-empty {
   position: absolute;
   inset: 8px 0 22px;
@@ -450,6 +453,8 @@ td .desc { display: block; color: var(--ink-3); font-size: 12.5px; }
   white-space: normal;
 }
 .pick:hover { background: var(--ground); }
+/* Списки прокручиваются, и рамка фокуса снаружи обрезалась бы — рисуем её внутри */
+.pick:focus-visible, .script-list button:focus-visible { outline-offset: -2px; }
 .pick .name { font-weight: 500; word-break: break-all; font-size: 13.5px; }
 .pick .desc { display: block; color: var(--ink-3); font-size: 12.5px; }
 .mark {
@@ -605,6 +610,7 @@ button.lg-remove:hover { background: var(--ground); color: var(--bad); }
 }
 .editor textarea:focus { box-shadow: none; }
 .reference-box { margin-top: 12px; padding: 12px 0 14px; }
+.editor-keys { margin: 6px 0 8px; font-size: 12.5px; }
 
 .suggest { position: relative; }
 .suggest-list {

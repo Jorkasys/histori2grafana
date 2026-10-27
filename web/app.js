@@ -17,7 +17,12 @@ const STATES = {
   error: ['Ошибка копирования', 'bad'],
 };
 
+const TITLES = {
+  connection: 'Подключение', loading: 'Копирование', charts: 'Графики', scripts: 'Скрипты',
+};
+
 let current = null;
+let opened = false;             // первая страница уже открыта
 
 async function route() {
   const name = (location.hash.replace(/^#\//, '').split('?')[0]) || '';
@@ -41,8 +46,19 @@ async function route() {
     else a.removeAttribute('aria-current');
   }
   const view = clear(document.getElementById('view'));
+  document.title = `${TITLES[name] || TITLES.connection} — historian2grafana`;
+  scrollTo(0, 0);
   try {
     current = { name, hash: location.hash, ...(await page(view)) };
+    // При переходе фокус встаёт на заголовок новой страницы: экранный диктор его
+    // прочитает, а Tab пойдёт дальше по этой странице, а не по шапке. Если за время
+    // загрузки пользователь уже ушёл фокусом в саму страницу, фокус не трогаем
+    const heading = view.querySelector('h1');
+    if (opened && heading && !view.contains(document.activeElement)) {
+      heading.tabIndex = -1;
+      heading.focus({ preventScroll: true });
+    }
+    opened = true;
   } catch (error) {
     // Страница не загрузилась (чаще всего нет связи с приложением): не оставляем её пустой
     console.error(error);
@@ -88,8 +104,9 @@ async function start() {
   await route();
   pill();
   setInterval(pill, 3000);
+  // Grafana проверяется при открытии и при щелчке по ссылке, без постоянного опроса:
+  // каждая неудачная проверка оставляет ошибку в консоли браузера
   probeGrafana();
-  setInterval(probeGrafana, 60000);
 }
 
 start();

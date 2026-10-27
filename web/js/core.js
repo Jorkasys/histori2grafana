@@ -110,11 +110,12 @@ export function icon(name, cls = 'icon') {
 export function toast(message, kind = 'info', ms = 5000, action = null) {
   const node = el('div', { class: `toast ${kind}`, role: kind === 'bad' ? 'alert' : null });
   const close = () => node.remove();
-  node.append(el('span', { class: 'toast-text' }, message),
+  // append превращает null в текст «null», поэтому пустую кнопку действия отбрасываем
+  node.append(...[el('span', { class: 'toast-text' }, message),
     action ? el('button', { class: 'link', type: 'button',
       onclick: () => { close(); action.run(); } }, action.label) : null,
     el('button', { class: 'toast-close', type: 'button', 'aria-label': 'Закрыть уведомление',
-      onclick: close }, icon('cross')));
+      onclick: close }, icon('cross'))].filter(Boolean));
   document.getElementById('toasts').append(node);
   // Пока над уведомлением мышь или фокус, оно не исчезает
   let timer = setTimeout(close, ms);
@@ -288,19 +289,15 @@ export async function probeGrafana() {
   return shared.grafana;
 }
 
-// Ссылка на Grafana: если та не отвечает, объясняем почему, вместо пустой вкладки
+// Ссылка на Grafana: если та не отвечала, сразу объясняем почему, вместо пустой вкладки,
+// и проверяем ещё раз — после её запуска следующий щелчок откроет её
 export function guardGrafana(link) {
-  link.addEventListener('click', async (e) => {
+  link.addEventListener('click', (e) => {
     if (shared.grafana !== false) return;
     e.preventDefault();
-    if (await probeGrafana()) {
-      window.open(link.href, '_blank', 'noopener');
-      return;
-    }
-    toast(`Grafana не отвечает по адресу ${grafanaBase(shared.info)}. Она запускается вместе ` +
-      'с приложением: в комплекте без интернета — файлом start.bat, в Docker — контейнером ' +
-      'grafana. Если Grafana работает на другом компьютере, её адрес задаётся настройкой ' +
-      'GRAFANA_URL.', 'bad', 14000);
+    toast(`Grafana не отвечает по адресу ${grafanaBase(shared.info)}. Обычно она запускается ` +
+      'вместе с приложением. Проверьте, что она запущена, и нажмите ещё раз.', 'bad', 9000);
+    probeGrafana();
   });
 }
 

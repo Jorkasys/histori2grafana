@@ -306,7 +306,30 @@ export async function connectionPage(view) {
   );
   drawRetrieval();
 
+  // Правки после проверки: протокол больше не про эти настройки
+  const outdated = () => {
+    const protocol = result.querySelector('.protocol');
+    if (!protocol || protocol.classList.contains('stale')) return;
+    protocol.classList.add('stale');
+    protocol.prepend(el('p', { class: 'note warn' }, 'Настройки изменены после проверки. ' +
+      'Проверьте подключение ещё раз.'));
+  };
+  const onEdit = (e) => { if (!result.contains(e.target)) outdated(); };
+  view.addEventListener('input', onEdit);
+  view.addEventListener('change', onEdit);
+  // Закрытие вкладки или перезагрузка с несохранёнными правками: браузер переспросит
+  const beforeUnload = (e) => {
+    if (changed()) e.preventDefault();
+  };
+  window.addEventListener('beforeunload', beforeUnload);
+
   return {
+    destroy() {
+      // view общий для всех страниц: снимаем то, что повесили на него и на окно
+      view.removeEventListener('input', onEdit);
+      view.removeEventListener('change', onEdit);
+      window.removeEventListener('beforeunload', beforeUnload);
+    },
     async leave() {
       return !changed() || confirmDialog('Настройки не сохранены',
         'Вы изменили настройки подключения, но не сохранили их. Если уйти со страницы, ' +

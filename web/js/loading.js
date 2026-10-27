@@ -24,6 +24,9 @@ function svg(tag, attrs = {}, ...children) {
   return node;
 }
 
+// Длительность опроса: «0 с» читается как «не было», поэтому короткие пишем словами
+const seconds = (s) => (s < 0.1 ? 'меньше 0,1 с' : `${s.toLocaleString('ru-RU')} с`);
+
 function figure(label) {
   const value = el('div', { class: 'value' }, '—');
   const sub = el('div', { class: 'sub' }, '');
@@ -74,6 +77,8 @@ export async function loadingPage(view) {
   let last = null;              // последний ответ /status
   let offset = 0;               // часы сервера минус часы браузера, с
   let journalAll = false;
+  let tagsCard = null;
+  let shownError = '';          // что сейчас в errorBox: не пересоздаём, чтобы диктор не повторял
   let timer = null;
   let tagTimer = null;
   let tapeTimer = null;
@@ -100,7 +105,7 @@ export async function loadingPage(view) {
       el('p', { class: 'hint' }, 'События копирования, новые сверху. Подробности ошибок есть и ' +
         'в журнале приложения: окно start.bat или docker compose logs app.'),
       journal, journalMore),
-    el('section', { class: 'card' },
+    tagsCard = el('section', { class: 'card' },
       el('h2', {}, 'Теги'),
       el('p', { class: 'hint' }, 'Что уже лежит в базе. Имя тега открывает его график.'),
       el('div', { class: 'row', style: 'margin-bottom:10px' },
@@ -164,7 +169,7 @@ export async function loadingPage(view) {
       marks.append(svg('line', { x1: at, x2: at, y1: bottom, y2: bottom - h, class: 'tape-mark' },
         svg('title', {}, document.createTextNode(`${dateTime(k.ts)} — ` +
           `${plural(k.rows, ['строка', 'строки', 'строк'])}, ` +
-          `опрос длился ${k.s.toLocaleString('ru-RU')} с`))));
+          `опрос длился ${seconds(k.s)}`))));
     }
 
     const labels = svg('g', { class: 'tape-labels' });
@@ -207,7 +212,10 @@ export async function loadingPage(view) {
     try {
       status = await get('/status');
     } catch (error) {
-      clear(errorBox).append(el('div', { class: 'note bad' }, error.message));
+      if (shownError !== 'offline') {
+        shownError = 'offline';
+        clear(errorBox).append(el('div', { class: 'note bad' }, error.message));
+      }
       return;
     }
     last = status;
@@ -239,7 +247,7 @@ export async function loadingPage(view) {
     f.behind.sub.textContent = db.synced_newest ? `скопировано до ${dateTime(db.synced_newest)}` : '';
     f.last.value.textContent = c.last_sync_at ? `${ago(now - c.last_sync_at)} назад` : '—';
     f.last.sub.textContent = c.cycle_s !== null && c.cycle_s !== undefined
-      ? `опрос длился ${c.cycle_s.toLocaleString('ru-RU')} с` : '';
+      ? `опрос длился ${seconds(c.cycle_s)}` : '';
     f.rows.value.textContent = count(db.rows);
     // Перекрытие перечитывается при каждом опросе, поэтому прочитано больше, чем лежит
     f.rows.sub.textContent = c.running && c.rows_copied
@@ -247,13 +255,17 @@ export async function loadingPage(view) {
     f.size.value.textContent = bytes(db.db_bytes);
     f.size.sub.textContent = db.timescale ? 'TimescaleDB, старое сжимается' : 'PostgreSQL';
 
-    clear(errorBox);
-    if (c.last_error) {
-      errorBox.append(el('div', { class: 'note bad' }, el('b', {}, 'Ошибка: '), c.last_error));
-    } else if (!c.running && !db.rows) {
-      errorBox.append(el('div', { class: 'note warn' }, 'Копирование не запущено. Настройте ' +
-        'подключение и нажмите «Сохранить и начать копирование». ',
-      el('a', { href: '#/connection' }, 'Перейти к подключению')));
+    const problem = c.last_error ? `error:${c.last_error}` : !c.running && !db.rows ? 'idle' : '';
+    if (problem !== shownError) {
+      shownError = problem;
+      clear(errorBox);
+      if (c.last_error) {
+        errorBox.append(el('div', { class: 'note bad' }, el('b', {}, 'Ошибка: '), c.last_error));
+      } else if (problem === 'idle') {
+        errorBox.append(el('div', { class: 'note warn' }, 'Копирование не запущено. Настройте ' +
+          'подключение и нажмите «Сохранить и начать копирование». ',
+        el('a', { href: '#/connection' }, 'Перейти к подключению')));
+      }
     }
 
     btnToggle.disabled = false;
@@ -358,7 +370,8 @@ export async function loadingPage(view) {
   await refresh();
   await loadTags();
   timer = setInterval(refresh, 3000);
-  tagTimer = setInterval(() => { if (document.activeElement !== search) loadTags(); }, 10000);
+  // Таблица обновляется раз в 10 с, но не пока в ней фокус: иначе фокус слетит
+  tagTimer = setInterval(() => { if (!tagsCard.contains(document.activeElement)) loadTags(); }, 10000);
   // Лента едет раз в секунду; если в системе просят меньше движения, только с данными
   tapeTimer = setInterval(() => {
     if (running && !calm.matches && !document.hidden && !hovering) drawTape();

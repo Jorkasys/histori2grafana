@@ -116,7 +116,7 @@ export async function chartsPage(view) {
         el('div', { class: 'segs' }, tabTags, tabScripts),
         search, pickHint, results),
       el('section', {},
-        el('div', { class: 'toolbar' }, segs, customBox),
+        el('div', { class: 'toolbar' }, segs, autoLabel, customBox),
         el('div', { class: 'toolbar' },
           el('span', { class: 'tool-group', role: 'group', 'aria-label': 'Раскладка' },
             el('span', { class: 'muted' }, 'Раскладка:'),
@@ -124,7 +124,6 @@ export async function chartsPage(view) {
               'все на один график'),
             el('button', { class: 'small', type: 'button', onclick: () => split() },
               'каждый тег отдельно')),
-          autoLabel,
           el('span', { class: 'spacer' }),
           el('button', { class: 'small', type: 'button', onclick: () => exportCsv(),
             title: 'Все значения тегов с графиков за период, файл для Excel' }, 'Скачать CSV'),
@@ -334,10 +333,12 @@ export async function chartsPage(view) {
   }
 
   function removePanel(i) {
+    const notify = undoable(`График ${i + 1} убран.`);
     state.panels.splice(i, 1);
     state.active = Math.min(state.active > i ? state.active - 1 : state.active,
       state.panels.length - 1);
     changed();
+    notify();
   }
 
   function merge() {

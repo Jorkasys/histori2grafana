@@ -77,9 +77,8 @@ export async function scriptsPage(view) {
   const gutter = el('pre', { class: 'gutter', 'aria-hidden': 'true' });
   const code = el('textarea', { spellcheck: 'false', autocomplete: 'off', autocapitalize: 'off',
     'aria-label': 'Текст скрипта', 'aria-describedby': 'code-keys' });
-  const codeKeys = el('span', { class: 'sr-only', id: 'code-keys' }, 'Tab вставляет отступ. ' +
-    'Чтобы перейти к следующей кнопке, нажмите Esc, затем Tab. Ctrl+Enter выполняет скрипт, ' +
-    'Ctrl+S сохраняет.');
+  const codeKeys = el('span', { class: 'muted', id: 'code-keys' }, 'Ctrl+Enter выполняет, ' +
+    'Ctrl+S сохраняет, Tab вставляет отступ. Выйти из редактора с клавиатуры: Esc, затем Tab.');
   const btnRun = el('button', { class: 'primary', type: 'button', onclick: () => run() },
     'Выполнить');
   const runState = el('span', { class: 'muted', role: 'status' });
@@ -111,9 +110,11 @@ export async function scriptsPage(view) {
         el('div', { class: 'toolbar' },
           el('div', { class: 'suggest', style: 'flex:1;min-width:240px' }, tagSearch, suggest),
           segs),
-        el('div', { class: 'editor' }, gutter, code), codeKeys,
-        el('div', { class: 'toolbar', style: 'margin-top:12px' }, btnRun,
-          el('span', { class: 'muted' }, 'или Ctrl+Enter'), runState),
+        el('div', { class: 'editor' }, gutter, code),
+        el('div', { class: 'toolbar', style: 'margin-top:12px' }, btnRun, runState),
+        el('p', { class: 'editor-keys' }, codeKeys),
+        // Ошибка сразу под кнопкой «Выполнить», а не за справкой
+        errorBox,
         // Справка рядом с редактором, а не под результатами
         el('details', { class: 'card reference-box' },
           el('summary', {}, 'Справка: что можно писать в скрипте'),
@@ -124,7 +125,7 @@ export async function scriptsPage(view) {
           el('a', { href: 'help/scripts.html', target: '_blank', rel: 'noopener' },
             'руководстве для начинающих'), '.'),
           reference),
-        errorBox, chartBox, outputBox, eventsBox)),
+        chartBox, outputBox, eventsBox)),
   );
 
   // --- редактор ----------------------------------------------------------------
@@ -399,8 +400,10 @@ export async function scriptsPage(view) {
       clearResults();
       const line = (error.message.match(/^строка (\d+)/) || [])[1];
       drawGutter(line ? Number(line) : null);
-      errorBox.append(el('div', { class: 'note bad', role: 'alert', style: 'margin-top:14px' },
+      runState.textContent = line ? `Ошибка в строке ${line}` : 'Ошибка';
+      errorBox.append(el('div', { class: 'note bad', role: 'alert', style: 'margin-top:4px' },
         error.message));
+      errorBox.scrollIntoView({ block: 'nearest' });
     } finally {
       btnRun.disabled = false;
     }

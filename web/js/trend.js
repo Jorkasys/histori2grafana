@@ -194,7 +194,15 @@ export class Trend {
       this.build(data);
     }
     this.renderLegend();
-    if (!this.scalesBox.hidden) this.renderScales();
+    // Пока в «Шкале» что-то вводят, автообновление её не перерисовывает: ввод не пропадает
+    if (!this.scalesBox.hidden && !this.scalesBox.contains(document.activeElement)) {
+      this.renderScales();
+    }
+  }
+
+  // Шкала только из дискретных тегов: у неё всегда 0 и 1, масштабировать её незачем
+  isBool(key) {
+    return this.specs.filter((s) => s.scale === key).every((s) => s.bool);
   }
 
   build(data) {
@@ -212,7 +220,7 @@ export class Trend {
     this.scaleKeys.forEach((key, i) => {
       const first = this.specs.find((s) => s.scale === key);
       // Дискретный тег: только 0 и 1, без делений 0,5
-      const bool = this.specs.filter((s) => s.scale === key).every((s) => s.bool);
+      const bool = this.isBool(key);
       scales[key] = {
         range: (_u, min, max) => (this.fixed[key] ? [...this.fixed[key]]
           : bool ? [-0.25, 1.25] : autoRange(min, max)),
@@ -287,6 +295,7 @@ export class Trend {
     if (!xZoom && !yZoom) return;
     if (yZoom) {
       for (const key of this.scaleKeys) {
+        if (this.isBool(key)) continue;
         const hi = u.posToVal(s.top, key);
         const lo = u.posToVal(s.top + s.height, key);
         if (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo) this.fixed[key] = [lo, hi];
@@ -337,7 +346,8 @@ export class Trend {
       const hi = el('input', { inputmode: 'decimal', value: fixed ? num(fixed[1]) : '',
         placeholder: 'авто', 'aria-label': `${name}: до` });
       // Текущий автоматический диапазон пишем текстом: в подсказке поля его плохо видно
-      const now = !fixed && current && Number.isFinite(current.min) && Number.isFinite(current.max)
+      const now = !fixed && !this.isBool(key) && current && Number.isFinite(current.min)
+        && Number.isFinite(current.max)
         ? el('span', { class: 'muted' }, `сейчас ${num(current.min)} … ${num(current.max)}`) : null;
       const apply = () => {
         const a = parse(lo.value);

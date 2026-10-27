@@ -22,6 +22,14 @@ SCHEMA = Path(__file__).with_name("schema.sql")
 VALUE_COLUMNS = ("ts", "tag_id", "value", "value_text", "quality")
 # Сырые данные старше этого срока TimescaleDB сжимает (в 10–20 раз)
 COMPRESS_AFTER = "7 days"
+# Поиск без учёта регистра и для русских букв. Комплект без интернета создаёт базу без
+# локали (initdb --no-locale), и там ILIKE и lower() кириллицу не сворачивают
+_UPPER_RU = "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ"
+_LOWER_RU = _UPPER_RU.lower()
+
+
+def _folded(column: str) -> str:
+    return f"translate(lower({column}), '{_UPPER_RU}', '{_LOWER_RU}')"
 
 
 def quote_ident(name: str) -> str:
@@ -240,9 +248,10 @@ class Database:
     async def list_tags(self, query: str = "", limit: int = 200, offset: int = 0,
                         include_inactive: bool = False, ids: Sequence[int] | None = None
                         ) -> tuple[int, list[dict[str, Any]]]:
-        pattern = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-        where = ["($1 = '' OR t.name ILIKE $2 OR coalesce(t.description, '') ILIKE $2)",
-                 "(t.active OR $3)"]
+        text = query.lower()
+        pattern = "%" + text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        name, descr = _folded("t.name"), _folded("coalesce(t.description, '')")
+        where = [f"($1 = '' OR {name} LIKE $2 OR {descr} LIKE $2)", "(t.active OR $3)"]
         args: list[Any] = [query, pattern, include_inactive]
         if ids is not None:
             where.append("t.tag_id = ANY($4::int[])")
