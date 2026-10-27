@@ -91,6 +91,7 @@ export function saveCsv(name, header, rows) {
 const ICONS = {
   check: 'M3 8.5l3.2 3.2L13 4.5',
   cross: 'M4 4l8 8M12 4l-8 8',
+  external: 'M9.5 2.5h4v4M13.5 2.5L7.5 8.5M12 9.5v4h-9v-9h4',
 };
 
 export function icon(name, cls = 'icon') {

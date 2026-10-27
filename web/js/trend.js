@@ -80,7 +80,7 @@ function align(specs) {
 }
 
 function value(v, spec) {
-  if (spec.bool) return v > 0 ? '1' : '0';
+  if (spec.bool) return v > 0 ? '1 (вкл)' : '0 (выкл)';
   return spec.unit ? `${num(v)} ${spec.unit}` : num(v);
 }
 

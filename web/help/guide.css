@@ -14,7 +14,7 @@
 .guide h4 { font-size: 15px; margin: 18px 0 6px; }
 /* Длина строки в em, а не в ch: ch — ширина цифры «0», кириллица у́же, и в 78ch
    входило до 105 знаков */
-.guide p, .guide li, .guide .note { line-height: 1.62; max-width: 38em; }
+.guide p, .guide li, .guide .note { line-height: 1.62; max-width: 38em; text-wrap: pretty; }
 .guide li { margin: 3px 0; }
 .guide code { font: 13px var(--code); background: #f1f4f2; padding: 1px 4px; border-radius: 2px; }
 .guide pre.output { margin: 10px 0 16px; overflow-x: auto; white-space: pre; }

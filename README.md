@@ -126,7 +126,7 @@ PowerShell нужен.
 http://localhost:8000. В окне будет примерно такой текст:
 
 ```
-historian2grafana 1.1.4 — запуск
+historian2grafana 1.1.5 — запуск
 
   Первый запуск: создаю базу данных в папке data\postgres…
   Запускаю PostgreSQL (порт 55432)…
@@ -224,7 +224,7 @@ check.bat HISTSRV01 1433
 powershell -ExecutionPolicy Bypass -File offline\build-offline.ps1 -Update
 ```
 
-Получится `dist\historian2grafana-update-1.1.4.zip`, меньше мегабайта. Внутри лежат папка
+Получится `dist\historian2grafana-update-1.1.5.zip`, меньше мегабайта. Внутри лежат папка
 `historian2grafana-offline` с файлами программы и «Как обновить.txt» с теми же шагами, что ниже,
 чтобы их можно было открыть прямо на виртуалке.
 
@@ -238,7 +238,7 @@ powershell -ExecutionPolicy Bypass -File offline\build-offline.ps1 -Update
    туда, где лежит `start.bat`. Когда Windows спросит про совпадающие файлы, выберите «Заменить
    файлы в папке назначения».
 5. Запустите `start.bat`. В первой строке окна должна быть новая версия:
-   `historian2grafana 1.1.4 — запуск`. Если браузер уже был открыт, обновите страницу (Ctrl+F5).
+   `historian2grafana 1.1.5 — запуск`. Если браузер уже был открыт, обновите страницу (Ctrl+F5).
    Номер версии виден и внизу страницы.
 
 Если в окне осталась старая версия, скорее всего, скопировалась сама папка, а не её содержимое,

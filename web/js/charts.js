@@ -1,7 +1,7 @@
 // Страница «Графики»: несколько графиков, на каждом теги и результаты скриптов.
 
 import {
-  RANGES, arrowKeys, clear, count, dateTime, debounce, el, fail, get, grafanaBase, guardGrafana,
+  RANGES, arrowKeys, clear, count, dateTime, debounce, el, fail, get, grafanaBase, guardGrafana, icon,
   hashParams, keepFocus, plural, post, recall, remember, shared, toast,
 } from './core.js';
 import { loadPeriod, periodPicker, savePeriod, spanOf } from './period.js';
@@ -95,7 +95,7 @@ export async function chartsPage(view) {
   const addPanel = el('button', { class: 'add-panel', type: 'button', onclick: () => newPanel() },
     'Новый график');
   const grafana = el('a', { class: 'btn small', target: '_blank', rel: 'noopener',
-    title: 'Те же теги и период в Grafana, в новой вкладке' }, 'Открыть в Grafana');
+    title: 'Те же теги и период в Grafana, в новой вкладке' }, 'Открыть в Grafana', icon('external'));
   guardGrafana(grafana);
 
   view.append(
@@ -555,7 +555,7 @@ export async function chartsPage(view) {
           const base = out.kind === 'events' && out.source && panel.items.find((it) => it[0] === 't'
             && tagData.get(idOf(it)) && tagData.get(idOf(it)).name === out.source);
           specs.push({
-            key: `${key}:${k}`, item: key, label: out.name,
+            key: `${key}:${k}`, item: key, label: `${name}: ${out.name}`,
             title: `Скрипт «${name}»: ${out.name}`,
             color: PENS[base ? colorOf(base) : (colorOf(key) + k) % PENS.length],
             unit: out.unit || '', bool: out.logical,

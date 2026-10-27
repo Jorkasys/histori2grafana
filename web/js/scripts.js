@@ -65,8 +65,8 @@ export async function scriptsPage(view) {
   // --- разметка ---------------------------------------------------------------
   const savedList = el('ul', { class: 'script-list' });
   const examples = el('ul', { class: 'script-list' });
-  const nameInput = el('input', { placeholder: 'Например: пики температуры смесителя',
-    'aria-label': 'Название скрипта' });
+  const nameInput = el('input', { id: 'script-name',
+    placeholder: 'Например: пики температуры смесителя' });
   const btnSave = el('button', { type: 'button', onclick: () => save(),
     title: 'Сохранить скрипт (Ctrl+S)' }, 'Сохранить');
   const btnDelete = el('button', { class: 'danger', type: 'button', onclick: () => remove() },
@@ -108,8 +108,9 @@ export async function scriptsPage(view) {
         el('p', { class: 'side-title' }, 'Примеры'),
         examples),
       el('section', {},
-        el('div', { class: 'toolbar' },
-          el('div', { style: 'flex:1;min-width:240px' }, nameInput), btnSave, btnDelete),
+        el('div', { class: 'toolbar', style: 'align-items:flex-end' },
+          el('label', { class: 'name-field', for: 'script-name' },
+            el('span', { class: 'side-title' }, 'Название'), nameInput), btnSave, btnDelete),
         el('div', { class: 'toolbar' },
           el('div', { class: 'suggest', style: 'flex:1;min-width:240px' }, tagSearch, suggest),
           picker.segs, picker.box),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -174,6 +175,9 @@ async def test_check_reports_steps(emu):
     assert [s.ok for s in steps] == [True, True, True]
     assert "подходит тегов: 5" in steps[1].detail
     assert "строк в сутки" in steps[2].detail
+    # Числа по-русски, как в интерфейсе: дробная часть через запятую
+    assert re.search(r"запрос (меньше 0,1|\d+,\d) с", steps[2].detail), steps[2].detail
+    assert not any(re.search(r"= -?\d+\.\d", item) for item in steps[2].items), steps[2].items
 
     steps = await check({**base, "include": "Nothing*"}, dialect=SQLITE,
                         connect=emulator.connector(emu), clock=lambda: T0)

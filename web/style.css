@@ -579,6 +579,10 @@ button.lg-remove:hover { background: var(--ground); color: var(--bad); }
 .script-list button:hover { background: var(--ground); }
 .script-list button.on { color: var(--pen); font-weight: 600; }
 .side-title { font-size: 13px; color: var(--ink-3); margin: 0 0 6px; }
+.name-field { flex: 1; min-width: 240px; display: flex; flex-direction: column; gap: 2px; }
+.name-field .side-title { margin: 0; }
+.nav a.external { gap: 4px; }
+.nav a.external .icon, .btn .icon { width: 12px; height: 12px; opacity: .8; }
 
 .editor {
   display: grid;

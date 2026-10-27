@@ -565,7 +565,7 @@ async def check(config: dict[str, Any], *, minutes: int = 10, sample: int = 50,
     try:
         info = await historian.server_info()
         steps.append(Step(f"Подключение ({driver})", True,
-                          f"за {time.monotonic() - started:.1f} с", info))
+                          f"за {_seconds(time.monotonic() - started)}", info))
 
         started = time.monotonic()
         try:
@@ -584,12 +584,12 @@ async def check(config: dict[str, Any], *, minutes: int = 10, sample: int = 50,
             return steps
         steps.append(Step(
             "Список тегов", True,
-            f"под условие «{rule}» подходит тегов: {len(tags)} — аналоговых {kinds['float64']}, "
-            f"дискретных {kinds['bool']}, строковых {kinds['string']} "
-            f"(прочитано за {time.monotonic() - started:.1f} с)",
+            f"под условие «{rule}» подходит тегов: {_count(len(tags))} — аналоговых "
+            f"{_count(kinds['float64'])}, дискретных {_count(kinds['bool'])}, строковых "
+            f"{_count(kinds['string'])} (прочитано за {_seconds(time.monotonic() - started)})",
             [f"{t.name}" + (f" — {t.description}" if t.description else "")
              + (f", {t.unit}" if t.unit else "") for t in tags[:15]]
-            + ([f"… и ещё {len(tags) - 15}"] if len(tags) > 15 else [])))
+            + ([f"… и ещё {_count(len(tags) - 15)}"] if len(tags) > 15 else [])))
 
         now = (clock or (lambda: datetime.now(timezone.utc)))()
         part = tags[:sample]
@@ -612,12 +612,12 @@ async def check(config: dict[str, Any], *, minutes: int = 10, sample: int = 50,
         for name in list(latest)[:10]:
             p = latest[name]
             value = p.text if p.text is not None else (
-                "плохое качество" if p.value is None else f"{p.value:g}")
+                "плохое качество" if p.value is None else _number(p.value))
             items.append(f"{name} = {value} (время {p.ts.astimezone().strftime('%d.%m %H:%M:%S')}, "
-                         f"значений за {minutes} мин: {per_tag[name]})")
-        detail = (f"за последние {minutes} мин по {len(part)} тегам — {len(points)} значений, "
-                  f"запрос {took:.1f} с. Ожидаемый объём на все {len(tags)} тегов: "
-                  f"около {_human(per_day)} строк в сутки")
+                         f"значений за {minutes} мин: {_count(per_tag[name])})")
+        detail = (f"за последние {minutes} мин по {_count(len(part))} тегам — "
+                  f"{_count(len(points))} значений, запрос {_seconds(took)}. Ожидаемый объём на "
+                  f"все {_count(len(tags))} тегов: около {_human(per_day)} строк в сутки")
         if not points:
             detail += (". Значений нет: теги за это время не менялись или историк их не "
                        "пишет — копирование всё равно можно запускать")
@@ -679,9 +679,22 @@ def hint(message: str, driver: str = "") -> str:
     return message
 
 
+# Числа в протоколе проверки — по-русски, как в интерфейсе: запятая, пробелы в разрядах
+def _count(value: int) -> str:
+    return f"{value:,}".replace(",", " ")
+
+
+def _number(value: float) -> str:
+    return f"{value:g}".replace(".", ",")
+
+
+def _seconds(value: float) -> str:
+    return "меньше 0,1 с" if value < 0.1 else f"{value:.1f} с".replace(".", ",")
+
+
 def _human(value: float) -> str:
     if value >= 1e6:
-        return f"{value / 1e6:.1f} млн"
+        return f"{value / 1e6:.1f} млн".replace(".", ",")
     if value >= 1e3:
         return f"{value / 1e3:.0f} тыс."
     return f"{value:.0f}"
