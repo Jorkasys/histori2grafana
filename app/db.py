@@ -279,6 +279,16 @@ class Database:
             "ts": _iso(r["ts"]), "value": r["value"], "text": r["value_text"],
             "quality": r["quality"]} for r in rows]
 
+    async def chart_tags(self) -> list[dict[str, Any]]:
+        """Теги, которые можно нарисовать: числовые и дискретные, по которым есть данные
+        или которые копируются. Без последних значений, поэтому быстро."""
+        async with self.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT t.tag_id, t.name, t.unit, t.datatype FROM tag t "
+                "WHERE t.datatype <> 'string' AND (t.active OR EXISTS "
+                "(SELECT 1 FROM tag_sync s WHERE s.tag_id = t.tag_id)) ORDER BY t.name")
+        return [dict(r) for r in rows]
+
     async def series(self, tags: Sequence[dict[str, Any]], start: datetime, end: datetime,
                      points: int = 800) -> dict[int, dict[str, Any]]:
         """Данные для графиков: на каждый шаг (end − start) / points среднее,

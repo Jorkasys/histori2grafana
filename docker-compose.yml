@@ -54,11 +54,15 @@ services:
       GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:-grafana_reader}
       GRAFANA_PORT: ${GRAFANA_PORT:-3000}
       GRAFANA_URL: ${GRAFANA_URL:-}
+      SAVED_DASHBOARDS_DIR: /dashboards
       HISTORIAN_OLD_TLS: ${HISTORIAN_OLD_TLS:-0}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       TZ: ${TZ:-Europe/Moscow}
     ports:
       - "${APP_PORT:-8000}:8000"
+    # Дашборды, сохранённые со страницы «Графики»: приложение пишет, Grafana читает
+    volumes:
+      - saved-dashboards:/dashboards
     # Свои записи имён для серверов, которые не находятся из контейнера
     # (раскомментируйте и впишите адрес, подробнее в docs/INSTALL.md, «Неполадки»):
     # extra_hosts:
@@ -97,13 +101,17 @@ services:
       GRAFANA_DB_USER: grafana_reader
       GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:-grafana_reader}
       DASHBOARDS_DIR: /etc/grafana/dashboards
+      SAVED_DASHBOARDS_DIR: /etc/grafana/saved-dashboards
+      APP_URL: http://app:8000
     ports:
       - "${GRAFANA_PORT:-3000}:3000"
     volumes:
       - grafana-data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/etc/grafana/dashboards:ro
+      - saved-dashboards:/etc/grafana/saved-dashboards:ro
 
 volumes:
   db-data:
   grafana-data:
+  saved-dashboards:

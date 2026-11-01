@@ -36,6 +36,7 @@ GRAFANA_HOME = RUNTIME / "grafana"
 GRAFANA_DATA = DATA / "grafana"
 GRAFANA_LOG = DATA / "grafana.log"
 GRAFANA_PID = DATA / "grafana.pid"
+SAVED_DASHBOARDS = DATA / "dashboards"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 NEW_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
@@ -81,6 +82,7 @@ def app_environment(cfg: dict[str, str]) -> None:
         "DB_USER": DB_USER, "DB_PASSWORD": cfg["DB_PASSWORD"],
         "GRAFANA_DB_USER": READER, "GRAFANA_DB_PASSWORD": cfg["GRAFANA_DB_PASSWORD"],
         "GRAFANA_PORT": cfg["GRAFANA_PORT"], "GRAFANA_URL": cfg["GRAFANA_URL"],
+        "SAVED_DASHBOARDS_DIR": str(SAVED_DASHBOARDS),
         "WEB_HOST": "0.0.0.0", "WEB_PORT": cfg["APP_PORT"],
         "HISTORIAN_OLD_TLS": cfg["HISTORIAN_OLD_TLS"], "LOG_LEVEL": cfg["LOG_LEVEL"],
         "FREETDSCONF": str(ROOT / "docker" / "freetds.conf"),
@@ -211,6 +213,7 @@ def start_grafana(cfg: dict[str, str]) -> subprocess.Popen | None:
         return None
     print(f"  Запускаю Grafana (порт {port})…")
     GRAFANA_DATA.mkdir(parents=True, exist_ok=True)
+    SAVED_DASHBOARDS.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env.update({
         "GF_PATHS_DATA": str(GRAFANA_DATA),
@@ -237,6 +240,8 @@ def start_grafana(cfg: dict[str, str]) -> subprocess.Popen | None:
         "GRAFANA_DB_USER": READER,
         "GRAFANA_DB_PASSWORD": cfg["GRAFANA_DB_PASSWORD"],
         "DASHBOARDS_DIR": str(ROOT / "grafana" / "dashboards"),
+        "SAVED_DASHBOARDS_DIR": str(SAVED_DASHBOARDS),
+        "APP_URL": f"http://127.0.0.1:{cfg['APP_PORT']}",
     })
     log = open(GRAFANA_LOG, "ab")
     # Без своего окна: Grafana работает в фоне и не мешает окну приложения

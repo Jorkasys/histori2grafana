@@ -6,7 +6,7 @@ import {
   post, put, recall, remember, saveCsv, toast,
 } from './core.js';
 import { loadPeriod, periodPicker, savePeriod, spanOf } from './period.js';
-import { PENS, Trend } from './trend.js';
+import { PENS, Trend, moveLooks } from './trend.js';
 
 const STORE = 'scripts';
 const iso = (seconds) => new Date(seconds * 1000).toISOString();
@@ -14,6 +14,14 @@ const iso = (seconds) => new Date(seconds * 1000).toISOString();
 const BLANK = '# Новый скрипт. Например:\n# t = tag("имя тега")\n# show(peaks(t, level=80), "пики")\n';
 
 const EXAMPLES = [
+  { name: 'Значение в момент включения', code: (a, _b, run) => `# Когда один тег переходит из 0 в 1, запоминаем значение другого
+# и держим его до следующего включения: на графике получаются ступени
+run = tag("${run}")
+value = tag("${a}")
+on = crossings(run, 0.5, "up")
+show(hold(where(value, on)), "значение при включении")
+print("включений за период:", count(on))
+` },
   { name: 'Пики выше порога', code: (a) => `# Пики выше уровня, который превышают лишь 5 % значений,
 # не чаще одного за 10 минут. Уровень можно задать числом: level = 80
 t = tag("${a}")
@@ -308,6 +316,8 @@ export async function scriptsPage(view) {
       const data = await get('/tags?limit=50');
       const numeric = data.items.filter((t) => t.datatype === 'float64').map((t) => t.name);
       if (numeric.length) names = [numeric[0], numeric[1] || numeric[0]];
+      const flags = data.items.filter((t) => t.datatype === 'bool').map((t) => t.name);
+      names.push(flags[0] || 'имя дискретного тега');
     } catch { /* останутся заглушки */ }
     current = { script_id: null };
     nameInput.value = ex.name;
@@ -339,6 +349,7 @@ export async function scriptsPage(view) {
       const body = { name, code: code.value };
       const result = current.script_id ? await put(`/scripts/${current.script_id}`, body)
         : await post('/scripts', body);
+      if (!current.script_id) moveLooks('n:', `s:${result.script_id}:`);
       current = result;
       dirty = false;
       keep();
@@ -420,8 +431,9 @@ export async function scriptsPage(view) {
       colors[k] = (out.source && lineOf.get(out.source)) || PENS[spare++ % PENS.length];
     });
     const specs = result.outputs.map((out, k) => ({
-      key: `o${k}`, label: out.name, title: out.name, unit: out.unit || '', bool: out.logical,
-      color: colors[k],
+      key: `o${k}`, look: `${current.script_id ? `s:${current.script_id}` : 'n'}:${out.name}`,
+      label: out.name, title: out.name, unit: out.unit || '', bool: out.logical,
+      color: colors[k], end: out.end,
       scale: out.unit ? `u:${out.unit}` : out.source ? `src:${out.source}` : `own:${k}`,
       kind: out.kind === 'events' ? 'events' : 'line', t: out.t, v: out.v, count: out.count,
       removable: false,

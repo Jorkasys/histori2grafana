@@ -5,7 +5,8 @@ import {
   hashParams, keepFocus, plural, post, recall, remember, shared, toast,
 } from './core.js';
 import { loadPeriod, periodPicker, savePeriod, spanOf } from './period.js';
-import { PENS, Trend } from './trend.js';
+import { dashboardDialog } from './dashboards.js';
+import { HEIGHTS, PENS, Trend } from './trend.js';
 
 const MAX_PANELS = 8;
 const MAX_ITEMS = 8;          // тегов и скриптов на одном графике
@@ -49,7 +50,9 @@ export async function chartsPage(view) {
     state.panels = [{ items: params.get('ids').split(',').filter(Boolean).map((id) => `t:${id}`),
       fixed: {} }];
   } else if (params.get('p') !== null) {
-    state.panels = parsePanels(params.get('p'));
+    // В адресе только состав графиков. Если он тот же, берём сохранённые шкалы и высоту
+    state.panels = Array.isArray(saved.panels) && formatPanels(saved.panels) === params.get('p')
+      ? saved.panels : parsePanels(params.get('p'));
   } else if (Array.isArray(saved.panels)) {
     state.panels = saved.panels;
     state.active = saved.active || 0;
@@ -95,7 +98,7 @@ export async function chartsPage(view) {
   const addPanel = el('button', { class: 'add-panel', type: 'button', onclick: () => newPanel() },
     'Новый график');
   const grafana = el('a', { class: 'btn small', target: '_blank', rel: 'noopener',
-    title: 'Те же теги и период в Grafana, в новой вкладке' }, 'Открыть в Grafana', icon('external'));
+    title: 'Те же теги, скрипты и период в Grafana, в новой вкладке' }, 'Открыть в Grafana', icon('external'));
   guardGrafana(grafana);
 
   view.append(
@@ -118,6 +121,9 @@ export async function chartsPage(view) {
           el('span', { class: 'spacer' }),
           el('button', { class: 'small', type: 'button', onclick: () => exportCsv(),
             title: 'Все значения тегов с графиков за период, файл для Excel' }, 'Скачать CSV'),
+          el('button', { class: 'small', type: 'button', onclick: () => saveDashboard(),
+            title: 'Эти графики с тегами и скриптами станут дашбордом в Grafana' },
+          'Сохранить как дашборд'),
           grafana),
         panelsBox, addPanel)),
   );
@@ -370,6 +376,12 @@ export async function chartsPage(view) {
       const trend = new Trend(panelsBox, {
         title: `График ${i + 1}`,
         fixed: panel.fixed,
+        height: HEIGHTS[panel.height] || HEIGHTS.normal,
+        onLook: () => draw(),
+        onHeight: (name) => {
+          panel.height = name;
+          save();
+        },
         empty: 'Пустой график. Добавьте теги кнопкой «Добавить тег» в заголовке.',
         onActivate: () => activate(i),
         onTimeZoom: (from, to) => zoomTo(from, to),
@@ -555,12 +567,13 @@ export async function chartsPage(view) {
           const base = out.kind === 'events' && out.source && panel.items.find((it) => it[0] === 't'
             && tagData.get(idOf(it)) && tagData.get(idOf(it)).name === out.source);
           specs.push({
-            key: `${key}:${k}`, item: key, label: `${name}: ${out.name}`,
+            key: `${key}:${k}`, look: `${key}:${out.name}`, item: key, label: `${name}: ${out.name}`,
             title: `Скрипт «${name}»: ${out.name}`,
             color: PENS[base ? colorOf(base) : (colorOf(key) + k) % PENS.length],
             unit: out.unit || '', bool: out.logical,
             scale: out.unit ? `u:${out.unit}` : out.source ? `src:${out.source}` : `own:${key}:${k}`,
             kind: out.kind === 'events' ? 'events' : 'line', t: out.t, v: out.v, count: out.count,
+            end: out.end,
           });
         });
         if (done.r.text.length) {
@@ -650,11 +663,30 @@ export async function chartsPage(view) {
       `${dateTime(to, false)}. Файл появится в загрузках браузера.`, 'ok');
   }
 
+  function saveDashboard() {
+    if (!allItems().length) {
+      fail(new Error('На графиках нет ни тегов, ни скриптов, сохранять нечего'));
+      return;
+    }
+    dashboardDialog(() => ({
+      span: { range: state.range, from: state.from, to: state.to },
+      panels: state.panels.map((panel, i) => {
+        const series = views[i] ? views[i].describeLooks() : [];
+        return { title: series.length === 1 ? series[0].name : `График ${i + 1}`,
+          height: panel.height, items: panel.items, series };
+      }).filter((p) => p.items.length),
+    }));
+  }
+
   function grafanaLink() {
     const query = new URLSearchParams();
     for (const id of tagIds()) {
       const info = tagInfo.get(id);
       if (info) query.append('var-tag', info.name);
+    }
+    for (const id of scriptIds()) {
+      const script = scriptList.find((s) => s.script_id === id);
+      if (script) query.append('var-script', script.node);
     }
     if (state.range === 'custom') {
       query.set('from', String(Math.round(state.from * 1000)));

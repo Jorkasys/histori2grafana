@@ -539,7 +539,24 @@ button.lg-remove:hover { background: var(--ground); color: var(--bad); }
 }
 .scale-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .scale-name { color: var(--c); font-weight: 600; }
-.scales input { width: 90px; min-height: 28px; padding: 3px 7px; font-size: 13px; }
+.scales input:not([type=checkbox]) { width: 90px; min-height: 28px; padding: 3px 7px; font-size: 13px; }
+.scales select { width: auto; min-height: 28px; padding: 3px 7px; font-size: 13px; }
+.scales .check { font-size: 13px; }
+.looks .scale-row { flex-basis: 100%; gap: 6px 10px; }
+.look-name { min-width: 180px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.swatches { display: inline-flex; gap: 4px; }
+button.swatch {
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  padding: 0;
+  border: 1px solid var(--paper);
+  border-radius: 50%;
+  background: var(--c);
+  box-shadow: 0 0 0 1px var(--rule);
+}
+button.swatch:hover { background: var(--c); box-shadow: 0 0 0 1px var(--ink-3); }
+button.swatch.on { box-shadow: 0 0 0 2px var(--ink); }
 .texts { padding: 0 12px 10px; }
 .texts .table-wrap { max-height: 220px; }
 
@@ -708,6 +725,10 @@ button.toast-close:hover { background: var(--ground); color: var(--ink); }
 .modal h2 { margin: 0 0 8px; font-size: 17px; }
 .modal-text { color: var(--ink-2); font-size: 14px; }
 .modal-text p { margin: 0 0 8px; }
+.modal .name-field { margin-bottom: 8px; }
+.saved-boards { list-style: none; margin: 4px 0 0; padding: 0; max-height: 190px; overflow-y: auto; }
+.saved-boards li { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
+.saved-boards a { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
 .spinner {
   width: 14px;

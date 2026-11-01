@@ -268,6 +268,8 @@ HELP: list[tuple[str, str, str]] = [
     ("resample", 'resample(ряд, "1m", "mean")',
      'Приводит ряд к ровному шагу: "mean" берёт среднее за шаг, "min" и "max" крайние '
      'значения, "last" последнее.'),
+    ("hold", "hold(ряд)", "Держит каждое значение до следующего: из отдельных событий получается "
+     "ступенчатый ряд. Разрывы тоже заполняются последним значением."),
     ("const", "const(80, ряд)", "Рисует горизонтальную линию, например порог, на шкале "
      "указанного ряда."),
     ("mean", "mean(ряд)", "Среднее за период с учётом того, сколько держалось каждое значение."),
@@ -741,7 +743,9 @@ class _Run:
     def f_where(self, x: Any, condition: Any) -> Series:
         s = self.series(x, "where")
         cond = self.series(condition, "where", "условие")
-        return _combine(s, cond, lambda v, c: v if v is not None and _truth(c) else None,
+        # События отбирают сами моменты: у пересечения порога 0 значение события равно 0
+        test = (lambda c: c is not None) if cond.events else _truth
+        return _combine(s, cond, lambda v, c: v if v is not None and test(c) else None,
                         unit=s.unit, source=s.source)
 
     # --- пики и пересечения -----------------------------------------------------
@@ -934,6 +938,11 @@ class _Run:
                 else:
                     values.append(inside[-1])
         return s.derive(times, values, events=False)
+
+    def f_hold(self, x: Any) -> Series:
+        s = self.series(x, "hold")
+        pairs = [(t, v) for t, v in zip(s.t, s.v) if v is not None]
+        return s.derive([p[0] for p in pairs], [p[1] for p in pairs], events=False)
 
     def f_const(self, value: Any, like: Any = None) -> Series:
         k = self.number(value, "const", "значение")
@@ -1165,7 +1174,7 @@ def _output(name: str, s: Series, points: int) -> dict[str, Any]:
             t.append(s.end)
             v.append(v[-1])
     return {"name": name, "kind": "events" if s.events else "line", "unit": s.unit,
-            "source": s.source, "logical": s.logical, "t": t, "v": v,
+            "source": s.source, "logical": s.logical, "t": t, "v": v, "end": s.end,
             "count": len(s.valid()), "truncated": truncated}
 
 
@@ -1180,7 +1189,7 @@ async def run(db, code: str, start: datetime, end: datetime, *, points: int = 10
         item = raw.get(name)
         if item is None:
             data[name] = (f"тега «{name}» нет в базе приложения — проверьте имя в таблице "
-                          "тегов на странице «Загрузка»")
+                          "тегов на странице «Копирование»")
         elif item["datatype"] == "string":
             data[name] = f"тег «{name}» строковый, а скрипты считают только числа"
         elif item["too_many"]:

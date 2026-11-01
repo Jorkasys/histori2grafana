@@ -34,7 +34,8 @@ COPY web/ ./web/
 COPY docker/ ./docker/
 
 RUN useradd --system --uid 10001 --create-home historian \
-    && chown -R historian:historian /app
+    && mkdir -p /dashboards \
+    && chown -R historian:historian /app /dashboards
 USER historian
 
 EXPOSE 8000

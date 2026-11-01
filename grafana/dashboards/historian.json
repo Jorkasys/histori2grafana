@@ -1,7 +1,7 @@
 {
   "uid": "historian-tags",
   "title": "Теги историка",
-  "description": "Значения тегов AVEVA Historian, скопированные в базу historian2grafana",
+  "description": "Значения тегов AVEVA Historian и результаты скриптов из базы historian2grafana",
   "tags": [
     "historian2grafana"
   ],
@@ -49,6 +49,25 @@
         "options": [],
         "hide": 0,
         "description": "Выберите один или несколько тегов; можно искать по имени и описанию"
+      },
+      {
+        "name": "script",
+        "label": "Скрипты",
+        "type": "query",
+        "datasource": {
+          "type": "graphite",
+          "uid": "historian-app"
+        },
+        "query": "Скрипты.*",
+        "definition": "Скрипты.*",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": false,
+        "sort": 0,
+        "current": {},
+        "options": [],
+        "hide": 0,
+        "description": "Сохранённые скрипты со страницы «Скрипты» приложения; считаются за период дашборда"
       }
     ]
   },
@@ -215,11 +234,90 @@
     },
     {
       "type": "row",
+      "title": "Результаты скриптов",
+      "collapsed": false,
+      "id": 7,
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "$script",
+      "id": 8,
+      "description": "Отдельный график на каждый выбранный скрипт. Считается за период дашборда",
+      "datasource": {
+        "type": "graphite",
+        "uid": "historian-app"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 24,
+        "h": 8
+      },
+      "repeat": "script",
+      "repeatDirection": "v",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "always",
+            "pointSize": 5,
+            "spanNulls": true,
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max",
+            "mean"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "graphite",
+            "uid": "historian-app"
+          },
+          "target": "Скрипты.$script"
+        }
+      ]
+    },
+    {
+      "type": "row",
       "title": "Каждый тег отдельно (строковые — в таблицах)",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 17,
+        "y": 26,
         "w": 24,
         "h": 1
       },
@@ -236,7 +334,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 18,
+        "y": 27,
         "w": 12,
         "h": 8
       },
@@ -302,7 +400,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 26,
+        "y": 35,
         "w": 24,
         "h": 1
       },
@@ -319,7 +417,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 27,
+        "y": 36,
         "w": 24,
         "h": 10
       },

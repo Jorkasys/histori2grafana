@@ -7,13 +7,14 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs
 
 import asyncpg
-from fastapi import Body, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import Body, FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, scripts
+from . import __version__, grafana, scripts
 from .config import Settings
 from .db import Database
 from .historian import DEFAULTS, HistorianError, check, normalize
@@ -216,7 +217,11 @@ def create_app(settings: Settings | None = None, *, historian_factory=None,
 
     @app.get("/api/scripts")
     async def scripts_list() -> dict[str, Any]:
-        return {"items": await db.list_scripts(),
+        items = await db.list_scripts()
+        nodes = {s["script_id"]: name for name, s in grafana.script_nodes(items).items()}
+        for item in items:
+            item["node"] = nodes[item["script_id"]]
+        return {"items": items,
                 "help": [{"name": n, "signature": s, "text": t} for n, s, t in scripts.HELP]}
 
     @app.post("/api/scripts")
@@ -258,6 +263,85 @@ def create_app(settings: Settings | None = None, *, historian_factory=None,
         if script is None:
             raise HTTPException(404, "такого скрипта нет — возможно, его удалили")
         return {"name": script["name"], **await run_script(script["code"], body)}
+
+    # ------------------------------------------------------------ Grafana
+    # Источник данных «Теги и скрипты»: Grafana обращается сюда как к Graphite
+    async def graphite_params(request: Request) -> dict[str, list[str]]:
+        params: dict[str, list[str]] = {}
+        for key, value in request.query_params.multi_items():
+            params.setdefault(key, []).append(value)
+        if request.method == "POST":
+            body = (await request.body()).decode("utf-8", "replace")
+            for key, values in parse_qs(body, keep_blank_values=True).items():
+                params.setdefault(key, []).extend(values)
+        return params
+
+    @app.api_route("/graphite/metrics/find", methods=["GET", "POST"])
+    async def graphite_find(request: Request) -> list[dict[str, Any]]:
+        params = await graphite_params(request)
+        return await grafana.find(db, (params.get("query") or ["*"])[0])
+
+    @app.api_route("/graphite/render", methods=["GET", "POST"])
+    async def graphite_render(request: Request) -> Any:
+        params = await graphite_params(request)
+
+        def one(key: str, default: str | None = None) -> str | None:
+            return (params.get(key) or [default])[0]
+        try:
+            points = int(float(one("maxDataPoints", "1000")))
+            return await grafana.render(db, params.get("target") or [], one("from"), one("until"),
+                                        points)
+        except (grafana.GrafanaError, ValueError) as exc:
+            return JSONResponse({"message": str(exc), "error": str(exc)}, status_code=400)
+
+    @app.get("/graphite/functions")
+    async def graphite_functions() -> dict[str, Any]:
+        # Функций Graphite нет: расчёты пишутся на странице «Скрипты»
+        return {}
+
+    @app.get("/graphite/version")
+    async def graphite_version() -> str:
+        return "1.1.10"
+
+    @app.get("/graphite/tags/{rest:path}")
+    async def graphite_tags(rest: str) -> list[str]:
+        return []
+
+    def dashboards_folder() -> Path:
+        return Path(settings.dashboards_dir)
+
+    def dashboard_info(item: dict[str, str]) -> dict[str, str]:
+        return {**item, "path": f"/d/{item['uid']}/"}
+
+    @app.get("/api/dashboards")
+    async def dashboards_list() -> dict[str, Any]:
+        return {"items": [dashboard_info(d)
+                          for d in grafana.saved_dashboards(dashboards_folder())]}
+
+    @app.post("/api/dashboards")
+    async def dashboard_save(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        title = " ".join(str(body.get("title") or "").split())
+        if not title:
+            raise HTTPException(400, "укажите название дашборда")
+        if len(title) > 100:
+            raise HTTPException(400, "название длиннее 100 символов")
+        panels = body.get("panels")
+        if not isinstance(panels, list) or len(panels) > 20:
+            raise HTTPException(400, "panels: ожидался список графиков")
+        try:
+            board = await grafana.build_dashboard(db, title, panels, body.get("span") or {})
+            replaced = grafana.save_dashboard(dashboards_folder(), board)
+        except (grafana.GrafanaError, KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(500, f"не удалось записать файл дашборда: {exc}") from exc
+        return {**dashboard_info({"uid": board["uid"], "title": title}), "replaced": replaced}
+
+    @app.delete("/api/dashboards/{uid}")
+    async def dashboard_delete(uid: str) -> dict[str, Any]:
+        if not grafana.delete_dashboard(dashboards_folder(), uid):
+            raise HTTPException(404, "такого дашборда нет — возможно, его уже удалили")
+        return {"ok": True}
 
     # ------------------------------------------------------------ страницы
     @app.middleware("http")

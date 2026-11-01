@@ -23,6 +23,8 @@ class Settings:
     # Адрес Grafana для ссылок в интерфейсе. Если пусто, берутся этот компьютер и порт ниже
     grafana_url: str = ""
     grafana_port: int = 3000
+    # Папка дашбордов, сохранённых со страницы «Графики»: за ней следит Grafana
+    dashboards_dir: str = "data/dashboards"
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "INFO"
@@ -39,6 +41,7 @@ class Settings:
             reader_password=os.environ.get("GRAFANA_DB_PASSWORD", cls.reader_password),
             grafana_url=_env("GRAFANA_URL").rstrip("/"),
             grafana_port=int(_env("GRAFANA_PORT", str(cls.grafana_port))),
+            dashboards_dir=_env("SAVED_DASHBOARDS_DIR", cls.dashboards_dir),
             host=_env("WEB_HOST", cls.host),
             port=int(_env("WEB_PORT", str(cls.port))),
             log_level=_env("LOG_LEVEL", cls.log_level).upper(),

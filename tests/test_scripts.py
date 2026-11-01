@@ -103,6 +103,36 @@ def test_where_crossings_and_logic():
     assert len(out["both"].t) == 3
 
 
+def test_value_at_switching_moment_held_until_next():
+    t = [T0 + i * 60 for i in range(7)]
+    level = Series(t, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0], t[-1] + 60, unit="%", source="L")
+    run_ = Series([T0, T0 + 120, T0 + 180, T0 + 300], [0.0, 1.0, 0.0, 1.0], t[-1] + 60)
+    res = run('on = crossings(tag("R"), 0.5, "up")\n'
+              'show(where(tag("L"), on), "точки")\n'
+              'show(hold(where(tag("L"), on)), "ступени")\n'
+              'show(where(tag("L"), crossings(tag("L"), 0, "both")), "нет")', L=level, R=run_)
+    out = outputs(res)
+    assert out["точки"].events and out["точки"].v == [3.0, 6.0]
+    held = out["ступени"]
+    assert not held.events and held.t == [T0 + 120, T0 + 300] and held.v == [3.0, 6.0]
+    assert held.end == t[-1] + 60 and held.unit == "%"
+
+
+def test_where_takes_event_moments_whatever_their_value():
+    t = [T0 + i * 60 for i in range(4)]
+    temp = Series(t, [-1.0, 1.0, -1.0, 1.0], t[-1])
+    # Пересечение порога 0 даёт события со значением 0: условие всё равно выполняется
+    out = outputs(run('t = tag("T")\nshow(where(t, crossings(t, 0, "up")), "w")', T=temp))
+    assert out["w"].t == [t[1], t[3]] and out["w"].v == [1.0, 1.0]
+
+
+def test_hold_fills_gaps_with_last_value():
+    t = [T0, T0 + 60, T0 + 120]
+    s = Series(t, [1.0, None, 3.0], T0 + 180)
+    out = outputs(run('show(hold(tag("S")), "h")', S=s))
+    assert out["h"].t == [T0, T0 + 120] and out["h"].v == [1.0, 3.0]
+
+
 def test_smooth_resample_rate_shift():
     t = [T0, T0 + 1800]
     s = Series(t, [10.0, 20.0], T0 + 3600, unit="°C", source="S")

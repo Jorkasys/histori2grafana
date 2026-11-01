@@ -10,7 +10,7 @@ datasources:
     url: ${DB_ADDRESS}
     user: ${GRAFANA_DB_USER}
     database: ${DB_NAME}
-    isDefault: true
+    isDefault: false
     editable: false
     secureJsonData:
       password: ${GRAFANA_DB_PASSWORD}
@@ -23,3 +23,16 @@ datasources:
       maxOpenConns: 10
       maxIdleConns: 4
       connMaxLifetime: 14400
+
+  # Теги и скрипты без SQL: приложение отвечает Grafana как сервер Graphite (плагины не
+  # нужны). Этот источник выбирается по умолчанию в новых панелях
+  - name: Теги и скрипты
+    uid: historian-app
+    type: graphite
+    access: proxy
+    url: ${APP_URL}/graphite
+    isDefault: true
+    editable: false
+    jsonData:
+      graphiteVersion: "1.1"
+      graphiteType: default

@@ -12,3 +12,14 @@ providers:
     updateIntervalSeconds: 30
     options:
       path: ${DASHBOARDS_DIR}
+
+  # Дашборды, сохранённые на странице «Графики». Папку заполняет приложение, удаляются они там же
+  - name: historian2grafana-saved
+    orgId: 1
+    folder: "Сохранённые"
+    type: file
+    disableDeletion: false
+    allowUiUpdates: true
+    updateIntervalSeconds: 3
+    options:
+      path: ${SAVED_DASHBOARDS_DIR}

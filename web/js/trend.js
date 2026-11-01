@@ -3,10 +3,14 @@
 // (страница загрузит этот период подробнее), по вертикали диапазон значений,
 // рамкой и то и другое. Двойной щелчок возвращает масштаб.
 
-import { clear, dateTime, el, icon, num } from './core.js';
+import { clear, dateTime, el, icon, keepFocus, num, recall, remember } from './core.js';
 
 export const PENS = ['#1f5aa6', '#c0392b', '#2e7d32', '#7b3fa0', '#b26a00', '#00838f',
   '#6d4c41', '#546e7a'];
+export const HEIGHTS = { low: 170, normal: 260, high: 420 };
+const DRAWS = [['steps', 'ступени'], ['line', 'линия'], ['points', 'точки']];
+const WIDTHS = [[1, 'тонкая'], [1.6, 'обычная'], [2.6, 'толстая']];
+const LOOKS = 'looks';
 const AXIS = '#5f6b77';
 const GRID = '#d6e0dc';
 const MINOR = '#edf2f0';
@@ -79,6 +83,50 @@ function align(specs) {
   return data;
 }
 
+// Вид ряда один на все графики обеих страниц, как и цвет тега
+const allLooks = () => recall(LOOKS, {});
+
+function saveLook(key, patch) {
+  const all = allLooks();
+  if (patch) all[key] = { ...all[key], ...patch };
+  else delete all[key];
+  remember(LOOKS, all);
+}
+
+// Скрипт сохранили: вид его рядов переходит к сохранённому скрипту
+export function moveLooks(from, to) {
+  const all = allLooks();
+  for (const key of Object.keys(all).filter((k) => k.startsWith(from))) {
+    all[to + key.slice(from.length)] = all[key];
+    delete all[key];
+  }
+  remember(LOOKS, all);
+}
+
+// Ряд с настройками вида. Перья по умолчанию: непрерывный ряд — ступени, события — точки
+function styled(s, window) {
+  const look = allLooks()[s.look || s.key] || {};
+  const draw = look.draw || (s.kind === 'events' ? 'points' : 'steps');
+  const out = { ...s, look: s.look || s.key, draw, width: look.width || 1.6, fill: !!look.fill,
+    colorSet: look.color !== undefined, canBand: !!s.lo };
+  if (out.colorSet) out.color = PENS[look.color % PENS.length];
+  if (draw === 'points' || look.band === false) {
+    out.lo = null;
+    out.hi = null;
+  }
+  // События линией: значение держится до следующего, последнее до конца ряда
+  if (s.kind === 'events' && draw !== 'points') {
+    const kept = s.t.map((t, i) => [t, s.v[i]]).filter((p) => p[1] !== null && p[1] !== undefined);
+    if (draw === 'steps' && kept.length) {
+      const end = Math.min(s.end ?? window[1], window[1]);
+      if (end > kept[kept.length - 1][0]) kept.push([end, kept[kept.length - 1][1]]);
+    }
+    out.t = kept.map((p) => p[0]);
+    out.v = kept.map((p) => p[1]);
+  }
+  return out;
+}
+
 function value(v, spec) {
   if (spec.bool) return v > 0 ? '1 (вкл)' : '0 (выкл)';
   return spec.unit ? `${num(v)} ${spec.unit}` : num(v);
@@ -87,10 +135,12 @@ function value(v, spec) {
 export class Trend {
   /**
    * opts: { title, height, sync, empty, fixed, live() — лента пишет до «сейчас»,
-   *         onTimeZoom(from, to), onReset(), onRemove(spec), onScales(fixed), onActivate() }
+   *         onTimeZoom(from, to), onReset(), onRemove(spec), onScales(fixed), onActivate(),
+   *         onLook() — изменился вид рядов, onHeight(имя) — изменилась высота графика }
    *
    * Ряды (update): { key, label, title, color, unit, scale, kind: 'line' | 'events',
-   *                  bool, t: [...], v: [...], lo?, hi? (полоса мин–макс), count? }
+   *                  bool, t: [...], v: [...], lo?, hi? (полоса мин–макс), count?,
+   *                  look? — ключ настроек вида, если он не совпадает с key, end? — конец ряда }
    */
   constructor(host, opts = {}) {
     this.opts = { height: 260, sync: 'h2g', empty: 'Нет данных', ...opts };
@@ -112,14 +162,17 @@ export class Trend {
     this.time = el('span', { class: 'trend-time' });
     this.scalesButton = el('button', { class: 'link', type: 'button', 'aria-expanded': 'false',
       onclick: () => this.toggleScales() }, 'Шкала');
-    this.tools = el('span', { class: 'trend-tools' }, this.scalesButton);
+    this.looksButton = el('button', { class: 'link', type: 'button', 'aria-expanded': 'false',
+      onclick: () => this.toggleLooks() }, 'Вид');
+    this.tools = el('span', { class: 'trend-tools' }, this.looksButton, this.scalesButton);
     this.legend = el('div', { class: 'legend' });
     this.scalesBox = el('div', { class: 'scales', hidden: true });
+    this.looksBox = el('div', { class: 'scales looks', hidden: true });
     this.body = el('div', { class: 'trend-body', role: 'img' });
     this.extra = el('div', { class: 'texts' });
     this.node = el('section', { class: 'trend' },
       el('div', { class: 'trend-head' }, this.title, this.spin, this.time, this.tools),
-      this.legend, this.scalesBox, this.body, this.extra);
+      this.legend, this.looksBox, this.scalesBox, this.body, this.extra);
     this.node.addEventListener('mousedown', () => this.opts.onActivate && this.opts.onActivate());
     host.append(this.node);
     this.observer = new ResizeObserver(() => this.resize());
@@ -159,10 +212,11 @@ export class Trend {
   // --- данные -------------------------------------------------------------------
   update(specs, window, notes = []) {
     this.window = window;
-    this.specs = specs;
+    this.raw = specs;
+    this.specs = specs.map((s) => styled(s, window));
     this.notes = notes;
     this.scaleKeys = [];
-    for (const s of specs) if (!this.scaleKeys.includes(s.scale)) this.scaleKeys.push(s.scale);
+    for (const s of this.specs) if (!this.scaleKeys.includes(s.scale)) this.scaleKeys.push(s.scale);
     this.spin.hidden = true;
     // Для экранного диктора: что нарисовано и за какой период
     this.body.setAttribute('aria-label', specs.length
@@ -175,11 +229,12 @@ export class Trend {
       this.signature = '';
       clear(this.body).append(el('div', { class: 'trend-empty' }, this.opts.empty));
       this.renderLegend();
+      this.drawLooksIfIdle();
       return;
     }
-    const data = align(specs);
-    const signature = specs.map((s) => [s.key, s.scale, s.kind, s.lo ? 1 : 0, s.color].join('|'))
-      .join(';');
+    const data = align(this.specs);
+    const signature = this.specs.map((s) => [s.key, s.scale, s.draw, s.width, s.fill, s.lo ? 1 : 0,
+      s.color].join('|')).join(';');
     if (this.plot && signature === this.signature) {
       this.plot.setData(data);
     } else {
@@ -191,6 +246,7 @@ export class Trend {
     if (!this.scalesBox.hidden && !this.scalesBox.contains(document.activeElement)) {
       this.renderScales();
     }
+    this.drawLooksIfIdle();
   }
 
   // Шкала только из дискретных тегов: у неё всегда 0 и 1, масштабировать её незачем
@@ -201,7 +257,7 @@ export class Trend {
   build(data) {
     if (this.plot) this.plot.destroy();
     clear(this.body);
-    const stepped = uPlot.paths.stepped({ align: 1 });
+    const paths = { steps: uPlot.paths.stepped({ align: 1 }), line: uPlot.paths.linear() };
     const several = this.scaleKeys.length > 1;
     const scales = {
       x: { time: true, range: (_u, min, max) => (this.window ? [...this.window] : [min, max]) },
@@ -237,17 +293,19 @@ export class Trend {
       const idx = series.length;
       const show = !this.hidden.has(s.key);
       this.index.push(idx);
-      if (s.kind === 'events') {
+      if (s.draw === 'points') {
         series.push({ label: s.label, scale: s.scale, show, stroke: s.color, width: 1,
           paths: () => null,
-          points: { show: true, size: 8, width: 1.6, stroke: s.color, fill: '#ffffff' } });
+          points: { show: true, size: 5 + s.width * 2, width: 1.6, stroke: s.color,
+            fill: s.fill ? s.color : '#ffffff' } });
         continue;
       }
-      series.push({ label: s.label, scale: s.scale, show, stroke: s.color, width: 1.6,
-        spanGaps: false, paths: stepped, points: { show: false } });
+      series.push({ label: s.label, scale: s.scale, show, stroke: s.color, width: s.width,
+        fill: s.fill ? rgba(s.color, 0.16) : undefined,
+        spanGaps: false, paths: paths[s.draw], points: { show: false } });
       if (s.lo) {
         for (let k = 0; k < 2; k += 1) {
-          series.push({ scale: s.scale, show, stroke: 'rgba(0,0,0,0)', width: 1, paths: stepped,
+          series.push({ scale: s.scale, show, stroke: 'rgba(0,0,0,0)', width: 1, paths: paths[s.draw],
             points: { show: false } });
         }
         bands.push({ series: [idx + 1, idx + 2], fill: rgba(s.color, 0.13) });
@@ -369,6 +427,83 @@ export class Trend {
         'щелчок возвращает как было.'));
   }
 
+  // --- вид рядов ------------------------------------------------------------------
+  toggleLooks() {
+    this.looksBox.hidden = !this.looksBox.hidden;
+    this.looksButton.setAttribute('aria-expanded', String(!this.looksBox.hidden));
+    if (!this.looksBox.hidden) this.renderLooks();
+  }
+
+  // Пока в «Виде» открыт список, автообновление его не перерисовывает: список бы закрылся
+  drawLooksIfIdle() {
+    if (!this.looksBox.hidden && !this.looksBox.contains(document.activeElement)) this.renderLooks();
+  }
+
+  setLook(spec, patch) {
+    saveLook(spec.look, patch);
+    if (this.opts.onLook) this.opts.onLook();
+    else this.update(this.raw, this.window, this.notes);
+    keepFocus(this.looksBox, () => this.renderLooks());
+  }
+
+  setHeight(name) {
+    this.opts.height = HEIGHTS[name] || HEIGHTS.normal;
+    this.resize();
+    if (this.opts.onHeight) this.opts.onHeight(name);
+  }
+
+  // Вид рядов для дашборда в Grafana. Цвет передаём, только если его выбрали: перья страницы
+  // рассчитаны на белый фон, а у Grafana свои цвета под тёмную тему
+  describeLooks() {
+    return this.specs.map((s) => ({ name: s.label, draw: s.draw, width: s.width, fill: s.fill,
+      bool: !!s.bool, color: s.colorSet ? s.color : null }));
+  }
+
+  renderLooks() {
+    clear(this.looksBox);
+    if (!this.specs.length) {
+      this.looksBox.append(el('span', { class: 'muted' }, 'Добавьте теги, и здесь появится их вид.'));
+      return;
+    }
+    const choice = (label, key, items, current, change) => {
+      const node = el('select', { 'aria-label': label, dataset: { key },
+        onchange: (e) => change(e.target.value) },
+      items.map(([v, text]) => el('option', { value: String(v) }, text)));
+      node.value = String(current);
+      return node;
+    };
+    const flag = (text, key, on, change) => el('label', { class: 'check' },
+      el('input', { type: 'checkbox', checked: on, dataset: { key },
+        onchange: (e) => change(e.target.checked) }), text);
+    for (const s of this.specs) {
+      this.looksBox.append(el('div', { class: 'scale-row' },
+        el('span', { class: 'scale-name look-name', style: `--c:${s.color}`, title: s.title || s.label },
+          s.label),
+        choice(`${s.label}: как рисовать`, `${s.key}:draw`, DRAWS, s.draw,
+          (v) => this.setLook(s, { draw: v })),
+        el('span', { class: 'muted' }, s.draw === 'points' ? 'размер' : 'линия'),
+        choice(`${s.label}: толщина`, `${s.key}:width`, WIDTHS, s.width,
+          (v) => this.setLook(s, { width: Number(v) })),
+        el('span', { class: 'swatches', role: 'group', 'aria-label': `${s.label}: цвет` },
+          PENS.map((c, k) => el('button', { class: `swatch${c === s.color ? ' on' : ''}`, type: 'button',
+            style: `--c:${c}`, 'aria-label': `Цвет ${k + 1}`, 'aria-pressed': String(c === s.color),
+            dataset: { key: `${s.key}:c${k}` }, onclick: () => this.setLook(s, { color: k }) }))),
+        flag('заливка', `${s.key}:fill`, s.fill, (on) => this.setLook(s, { fill: on })),
+        s.canBand && s.draw !== 'points'
+          ? flag('полоса мин–макс', `${s.key}:band`, !!s.lo, (on) => this.setLook(s, { band: on }))
+          : null));
+    }
+    this.looksBox.append(
+      this.opts.onHeight ? el('label', { class: 'scale-row' }, el('span', { class: 'muted' }, 'Высота графика'),
+        choice('Высота графика', 'height', [['low', 'низкий'], ['normal', 'обычный'], ['high', 'высокий']],
+          Object.keys(HEIGHTS).find((k) => HEIGHTS[k] === this.opts.height) || 'normal',
+          (v) => this.setHeight(v))) : null,
+      el('button', { class: 'small', type: 'button', dataset: { key: 'reset' }, onclick: () => {
+        for (const s of this.specs) saveLook(s.look, null);
+        this.setLook({ look: '' }, null);
+      } }, 'Вид по умолчанию'));
+  }
+
   // --- легенда --------------------------------------------------------------------
   renderLegend() {
     clear(this.legend);
@@ -377,7 +512,7 @@ export class Trend {
       const val = el('span', { class: 'lg-val' });
       const item = el('span', { class: `lg${this.hidden.has(s.key) ? ' off' : ''}`,
         style: `--c:${s.color}` },
-      el('i', { class: `lg-mark${s.kind === 'events' ? ' dot' : ''}` }),
+      el('i', { class: `lg-mark${s.draw === 'points' ? ' dot' : ''}` }),
       el('button', { class: 'lg-name', type: 'button', 'aria-pressed': String(!this.hidden.has(s.key)),
         title: `${s.title || s.label}\nЩелчок скрывает или показывает ряд`,
         onclick: () => this.toggle(i) }, s.label),
@@ -431,7 +566,7 @@ export class Trend {
       const item = this.items[i];
       if (!item) return;
       const col = u.data[this.index[i]];
-      if (s.kind === 'events') {
+      if (s.kind === 'events' && s.draw === 'points') {
         const v = at !== null ? col[at] : undefined;
         item.val.textContent = v !== undefined && v !== null ? value(v, s)
           : `${s.count ?? col.filter((x) => x !== undefined && x !== null).length} шт.`;
@@ -486,7 +621,7 @@ export class Trend {
     const r = 3.5 * px;
     ctx.save();
     this.specs.forEach((s, i) => {
-      if (s.kind === 'events' || this.hidden.has(s.key)) return;
+      if (s.draw === 'points' || this.hidden.has(s.key)) return;
       const col = u.data[this.index[i]];
       let j = col.length - 1;
       while (j >= 0 && col[j] === undefined) j -= 1;
