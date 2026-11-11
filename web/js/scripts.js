@@ -7,6 +7,7 @@ import {
 } from './core.js';
 import { loadPeriod, periodPicker, savePeriod, spanOf } from './period.js';
 import { PENS, Trend, moveLooks } from './trend.js';
+import { metricCards } from './metrics.js';
 
 const STORE = 'scripts';
 const iso = (seconds) => new Date(seconds * 1000).toISOString();
@@ -14,6 +15,22 @@ const iso = (seconds) => new Date(seconds * 1000).toISOString();
 const BLANK = '# Новый скрипт. Например:\n# t = tag("имя тега")\n# show(peaks(t, level=80), "пики")\n';
 
 const EXAMPLES = [
+  { name: 'Накопленный перевес коробок', code: (a) => `# Выберите тег веса. Одна запись должна соответствовать одной коробке.
+# Если вес опрашивается многократно, берите его по сигналу завершения взвешивания.
+weight = samples("${a}")
+d = weight - 28
+show(cum_sum(d), "Баланс отклонений, кг")
+show(cum_sum(clip(d, low=0)), "Накопленный перевес, кг")
+show(cum_sum(clip(-d, low=0)), "Накопленный недовес, кг")
+stat(sum(d), "Баланс за период", "кг")
+stat(sum(clip(d, low=0)), "Перевес за период", "кг")
+stat(sum(clip(-d, low=0)), "Недовес за период", "кг")
+` },
+  { name: 'Одно число за период', code: (a) => `# stat показывает число карточкой в приложении и отдаёт его в Grafana.
+# Замените mean(t) нужным расчётом. Для sum используйте отдельные события/записи.
+t = tag("${a}")
+stat(mean(t), "Среднее за период")
+` },
   { name: 'Значение в момент включения', code: (a, _b, run) => `# Когда один тег переходит из 0 в 1, запоминаем значение другого
 # и держим его до следующего включения: на графике получаются ступени
 run = tag("${run}")
@@ -131,7 +148,8 @@ export async function scriptsPage(view) {
         el('details', { class: 'card reference-box' },
           el('summary', {}, 'Справка: что можно писать в скрипте'),
           el('p', { class: 'hint' }, 'Язык похож на Python. Строка без присваивания показывает ' +
-            'результат: ряд — на графике, число — в выводе. Комментарии — после #. Дробные числа ' +
+            'результат: ряд — на графике, число — карточкой. stat(число, "подпись", "кг") ' +
+            'задаёт единицу показателя для приложения и Grafana. Комментарии — после #. Дробные числа ' +
             'в скрипте пишутся через точку (60.5), а вывод показывает их по-русски, с запятой. ' +
             'Подробно, с примерами и разбором ошибок — в ',
           el('a', { href: 'help/scripts.html', target: '_blank', rel: 'noopener' },
@@ -414,6 +432,7 @@ export async function scriptsPage(view) {
   function showResult(result, window) {
     clear(outputBox);
     clear(eventsBox);
+    if (result.metrics?.length) outputBox.append(metricCards(result.metrics));
     // Каждая линия своим цветом, события (пики) цветом линии своего тега
     const colors = [];
     const lineOf = new Map();
@@ -454,7 +473,7 @@ export async function scriptsPage(view) {
       outputBox.append(el('p', { class: 'side-title', style: 'margin-top:14px' }, 'Вывод'),
         el('pre', { class: 'output' }, result.text.join('\n')));
     }
-    if (!specs.length && !result.text.length) {
+    if (!specs.length && !result.text.length && !result.metrics?.length) {
       outputBox.append(el('p', { class: 'muted', style: 'margin-top:14px' },
         'Скрипт выполнен, но ничего не показал. Добавьте show(…) или print(…).'));
     }

@@ -8,10 +8,11 @@
 // Оглавление в Word заполняет сам Word: после сборки запустите toc.ps1.
 const fs = require('fs');
 const path = require('path');
+const TEXT_ONLY = process.argv.includes('--text-only');
 const {
   Document, Packer, Paragraph, TextRun, AlignmentType, TableOfContents, Footer, PageNumber,
-} = require('docx');
-const L = require('./lib.js');
+} = TEXT_ONLY ? {} : require('docx');
+const L = TEXT_ONLY ? null : require('./lib.js');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const DOCS = path.join(ROOT, 'docs');
@@ -264,11 +265,14 @@ ${out.join('\n')}
 // ------------------------------------------------------------------- сборка
 async function main() {
   for (const guide of GUIDES) {
+    if (process.argv.includes('--scripts-only') && guide.content !== './scripts-guide.js') continue;
     delete require.cache[require.resolve(guide.content)];
     const content = require(guide.content);
     fs.writeFileSync(path.join(DOCS, guide.md), markdown(content), 'utf8');
-    fs.writeFileSync(path.join(DOCS, guide.docx), await Packer.toBuffer(word(content, guide)));
-    console.log('ok', guide.md, guide.docx);
+    if (!TEXT_ONLY) {
+      fs.writeFileSync(path.join(DOCS, guide.docx), await Packer.toBuffer(word(content, guide)));
+    }
+    console.log('ok', guide.md, TEXT_ONLY ? '(без Word)' : guide.docx);
     if (guide.html) {
       const images = new Set();
       fs.writeFileSync(guide.html, html(content, images), 'utf8');

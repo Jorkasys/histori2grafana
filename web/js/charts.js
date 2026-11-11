@@ -17,15 +17,19 @@ const iso = (seconds) => new Date(seconds * 1000).toISOString();
 
 // Графики в адресе страницы: p=t12.t15~s3 — графики через «~», теги (t) и скрипты (s) через «.»
 function parsePanels(text) {
-  return text.split('~').map((part) => ({
-    items: part.split('.').map((x) => x.match(/^([ts])(\d+)$/)).filter(Boolean)
-      .map((m) => `${m[1]}:${m[2]}`),
-    fixed: {},
-  }));
+  return text.split('~').map((part) => {
+    const [items, type] = part.split('!');
+    return {
+      items: items.split('.').map((x) => x.match(/^([ts])(\d+)$/)).filter(Boolean)
+        .map((m) => `${m[1]}:${m[2]}`),
+      type: type === 'stat' ? 'stat' : 'timeseries', fixed: {},
+    };
+  });
 }
 
 function formatPanels(panels) {
-  return panels.map((p) => p.items.map((k) => k.replace(':', '')).join('.')).join('~');
+  return panels.map((p) => p.items.map((k) => k.replace(':', '')).join('.')
+    + (p.type === 'stat' ? '!stat' : '')).join('~');
 }
 
 const idOf = (key) => Number(key.split(':')[1]);
@@ -374,6 +378,7 @@ export async function chartsPage(view) {
     for (const v of views) v.destroy();
     views = state.panels.map((panel, i) => {
       const trend = new Trend(panelsBox, {
+        mode: panel.type || 'timeseries',
         title: `График ${i + 1}`,
         fixed: panel.fixed,
         height: HEIGHTS[panel.height] || HEIGHTS.normal,
@@ -396,6 +401,15 @@ export async function chartsPage(view) {
         },
         live,
       });
+      const mode = el('select', { 'aria-label': `Тип панели ${i + 1}` },
+        el('option', { value: 'timeseries' }, 'График'), el('option', { value: 'stat' }, 'Число'));
+      mode.value = panel.type || 'timeseries';
+      mode.addEventListener('change', () => {
+        panel.type = mode.value;
+        save();
+        renderPanels();
+      });
+      trend.tools.prepend(mode);
       trend.tools.prepend(el('button', { class: 'link', type: 'button', 'aria-expanded': 'false',
         onclick: (e) => openAdder(i, e.currentTarget) }, 'Добавить тег'));
       if (state.panels.length > 1) {
@@ -526,6 +540,7 @@ export async function chartsPage(view) {
       const trend = views[i];
       if (!trend) return;
       const specs = [];
+      const metrics = [];
       const notes = [];
       clear(trend.extra);
       for (const key of panel.items) {
@@ -576,12 +591,15 @@ export async function chartsPage(view) {
             end: out.end,
           });
         });
+        for (const m of done.r.metrics || []) {
+          metrics.push({ ...m, name: `${name}: ${m.name}`, item: key });
+        }
         if (done.r.text.length) {
           trend.extra.append(el('pre', { class: 'output' },
             done.r.text.map((line) => `${name}: ${line}`).join('\n')));
         }
       }
-      trend.update(specs, window, notes);
+      trend.update(specs, window, notes, metrics);
     });
   }
 
@@ -673,7 +691,7 @@ export async function chartsPage(view) {
       panels: state.panels.map((panel, i) => {
         const series = views[i] ? views[i].describeLooks() : [];
         return { title: series.length === 1 ? series[0].name : `График ${i + 1}`,
-          height: panel.height, items: panel.items, series };
+          type: panel.type || 'timeseries', height: panel.height, items: panel.items, series };
       }).filter((p) => p.items.length),
     }));
   }

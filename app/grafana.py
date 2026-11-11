@@ -156,13 +156,14 @@ _cache: dict[tuple, tuple[float, dict[str, Any]]] = {}
 
 
 async def _run_script(db, item: dict[str, Any], t0: datetime, t1: datetime,
-                      points: int) -> dict[str, Any]:
+                      points: int, *, rolling: bool = False) -> dict[str, Any]:
     """Панели обновляются каждые несколько секунд, а на длинном периоде скрипт считается
     заметное время: одно и то же окно считаем не чаще раза в CACHE_SECONDS."""
     # Окно «последний час» сдвигается при каждом обновлении: близкие концы считаем одним окном,
     # а окно той же длины в другом месте даёт другой ключ
-    key = (item["code"], round((t1 - t0).total_seconds() / 5), points,
-           t1.timestamp() // CACHE_SECONDS)
+    window = ((t1 - t0).total_seconds(), t1.timestamp() // CACHE_SECONDS) if rolling else (
+        t0.timestamp(), t1.timestamp())
+    key = (db, item["code"], points, rolling, *window)
     now = time.monotonic()
     hit = _cache.get(key)
     if hit and now - hit[0] < CACHE_SECONDS:
@@ -183,6 +184,8 @@ async def render(db, targets: list[str], start: str | None, until: str | None,
     """Ответ в формате Graphite: [{target, datapoints: [[значение, секунды], …]}, …]."""
     now = datetime.now(timezone.utc)
     t0, t1 = moment(start, now), moment(until, now)
+    rolling = (until is None or until.strip().lower() == "now") and bool(
+        start and _RELATIVE.fullmatch(start.strip()))
     if t0 >= t1:
         raise GrafanaError("начало периода должно быть раньше конца")
     if t1 - t0 > timedelta(days=400):
@@ -226,11 +229,17 @@ async def render(db, targets: list[str], start: str | None, until: str | None,
                 [p[column], p[0]] for p in values[tag["tag_id"]]["points"]]})
             continue
         item = entry["script"]
-        result = await _run_script(db, item, t0, t1, points)
+        result = await _run_script(db, item, t0, t1, points, rolling=rolling)
         for series in result["outputs"]:
             out.append({"target": f"{item['name']}: {series['name']}{suffix}",
                         "unit": series["unit"],
                         "datapoints": [[v, t] for t, v in zip(series["t"], series["v"])]})
+        # Один отсчёт представляет показатель за всё запрошенное окно. Stat в Grafana
+        # берёт Last, поэтому сумма периода не суммируется повторно по точкам.
+        for metric in result.get("metrics", []):
+            out.append({"target": f"{item['name']}: {metric['name']}{suffix}",
+                        "unit": metric["unit"],
+                        "datapoints": [[metric["value"], t1.timestamp()]]})
     return out
 
 
@@ -263,13 +272,16 @@ def _overrides(series: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _panel(number: int, spec: dict[str, Any], y: int, catalog: dict[str, str]) -> dict[str, Any]:
+    mode = spec.get("type", "timeseries")
+    if mode not in ("timeseries", "stat"):
+        raise GrafanaError("тип панели — timeseries или stat")
     targets = []
     for k, item in enumerate(spec["items"]):
         path = catalog.get(item)
         if path:
             targets.append({"refId": chr(65 + k), "target": path, "datasource": DATASOURCE})
     height = {"low": 7, "high": 14}.get(spec.get("height"), 10)
-    return {
+    panel = {
         "id": number, "type": "timeseries", "title": spec.get("title") or f"График {number}",
         "datasource": DATASOURCE, "targets": targets,
         "gridPos": {"x": 0, "y": y, "w": 24, "h": height},
@@ -284,6 +296,15 @@ def _panel(number: int, spec: dict[str, Any], y: int, catalog: dict[str, str]) -
                                "calcs": ["lastNotNull", "min", "max", "mean"]},
                     "tooltip": {"mode": "multi", "sort": "none"}},
     }
+    if mode == "stat":
+        panel["type"] = "stat"
+        panel["fieldConfig"] = {"defaults": {"noValue": "Нет данных"}, "overrides": []}
+        panel["options"] = {
+            "reduceOptions": {"values": False, "calcs": ["lastNotNull"], "fields": ""},
+            "orientation": "auto", "textMode": "value_and_name", "colorMode": "value",
+            "graphMode": "none", "justifyMode": "auto",
+        }
+    return panel
 
 
 async def build_dashboard(db, title: str, panels: list[dict[str, Any]],

@@ -56,6 +56,73 @@ def render(client, *targets, start="-1h", points=200):
         "maxDataPoints": points})
 
 
+@pytest.mark.asyncio
+async def test_numeric_scripts_render_without_a_database(monkeypatch):
+    class DB:
+        async def list_tags(self, *args, **kwargs):
+            return []
+
+        async def list_scripts(self):
+            return [{"script_id": 1, "name": "Вес", "code":
+                     'w = samples("W")\nd = w - 28\n'
+                     'show(cumsum(d), "накоплено")\n'
+                     'stat(sum(d), "баланс", "кг")\nstat(last(samples("Empty")), "нет")'}]
+
+        async def raw_values(self, names, start, end, limit):
+            return {"W": {"name": "W", "unit": "кг", "datatype": "float64",
+                           "t": [start.timestamp(), start.timestamp() + 10], "v": [28.5, 27.8],
+                           "end": end.timestamp(), "too_many": False},
+                    "Empty": {"name": "Empty", "unit": "", "datatype": "float64", "t": [],
+                              "v": [], "end": end.timestamp(), "too_many": False}}
+
+    async def catalog(_db):
+        return {"Скрипты.Вес": {"script": (await _db.list_scripts())[0]}}
+
+    monkeypatch.setattr(grafana, "_catalog", catalog)
+    monkeypatch.setattr(grafana, "_cache", {})
+    db = DB()
+    end = NOW.timestamp()
+    result = await grafana.render(db, ['aliasSub(Скрипты.Вес, "(^.*$)", "\\1 A")'],
+                                  str(end - 3600), str(end), 2)
+    assert [r["target"] for r in result] == ["Вес: накоплено A", "Вес: баланс A", "Вес: нет A"]
+    assert result[1]["datapoints"] == [[pytest.approx(0.3), end]]
+    assert result[1]["unit"] == "кг"
+    assert result[2]["datapoints"] == [[None, end]]
+    assert result[0]["datapoints"][-1][0] == pytest.approx(0.3)
+    # Число и накопление не зависят от количества точек для отрисовки.
+    other = await grafana.render(db, ["Скрипты.Вес"], str(end - 3600), str(end), 2000)
+    assert other[1]["datapoints"] == result[1]["datapoints"]
+
+
+def test_stat_panel_exports_last_value_and_no_sparkline():
+    panel = grafana._panel(1, {"items": ["s:1"], "type": "stat", "title": "Итого"},
+                           0, {"s:1": "Скрипты.Вес"})
+    assert panel["type"] == "stat"
+    assert panel["targets"][0]["target"] == "Скрипты.Вес"
+    assert panel["options"]["reduceOptions"]["calcs"] == ["lastNotNull"]
+    assert panel["options"]["graphMode"] == "none"
+    with pytest.raises(grafana.GrafanaError, match="тип панели"):
+        grafana._panel(1, {"items": [], "type": "unknown"}, 0, {})
+
+
+@pytest.mark.asyncio
+async def test_fixed_period_cache_does_not_merge_nearby_boundaries(monkeypatch):
+    calls = []
+
+    async def calculate(db, code, start, end, **kwargs):
+        calls.append(start)
+        return {"outputs": [], "metrics": [], "text": []}
+
+    monkeypatch.setattr(grafana.scripts, "run", calculate)
+    monkeypatch.setattr(grafana, "_cache", {})
+    db = object()
+    script = {"name": "Итого", "code": "stat(1)"}
+    await grafana._run_script(db, script, NOW - timedelta(hours=1), NOW, 100)
+    await grafana._run_script(db, script, NOW - timedelta(hours=1), NOW, 100)
+    await grafana._run_script(db, script, NOW - timedelta(hours=1, seconds=1), NOW, 100)
+    assert len(calls) == 2
+
+
 def make_app(settings, tmp_path):
     now = datetime.now(timezone.utc).replace(microsecond=0)
     asyncio.run(fill(settings, now))

@@ -26,5 +26,13 @@ node build.js                    # Markdown, Word и страница в при�
 powershell -ExecutionPolicy Bypass -File toc.ps1   # оглавления в Word
 ```
 
+Для обновления только Markdown и встроенной HTML-справки по скриптам без Word и npm-пакетов:
+
+```powershell
+node docs/source/build.js --text-only --scripts-only
+```
+
+Файлы Word этот режим не обновляет. Для них нужна полная сборка выше.
+
 Оглавление в Word может заполнить только сам Word, поэтому для него отдельный шаг. Номер
 версии на титульном листе берётся из `app/__init__.py`.

@@ -362,9 +362,10 @@ class Database:
                          limit: int) -> dict[str, dict[str, Any]]:
         """Значения тегов для скриптов в том виде, как они скопированы, без усреднения.
 
-        Возвращает {имя из скрипта: {name, unit, datatype, t, v, end, too_many}}.
+        Возвращает {имя из скрипта: {name, unit, datatype, t, v, end, too_many, seed}}.
         Имя ищется без учёта регистра, как в историке. None в v означает плохое
-        качество. Первая точка хранит значение, действовавшее к началу периода."""
+        качество. Первая точка хранит значение, действовавшее к началу периода.
+        seed=True означает, что эта точка перенесена из прошлого, а не записана на start."""
         if not names:
             return {}
         wanted = {n.lower(): n for n in names}
@@ -379,7 +380,8 @@ class Database:
                 if key is None or (key in out and out[key]["name"] == key):
                     continue
                 item = {"name": tag["name"], "unit": tag["unit"], "datatype": tag["datatype"],
-                        "t": [], "v": [], "end": end.timestamp(), "too_many": False}
+                        "t": [], "v": [], "end": end.timestamp(), "too_many": False,
+                        "seed": False}
                 out[key] = item
                 if tag["datatype"] == "string":
                     continue
@@ -391,10 +393,11 @@ class Database:
                     item["too_many"] = True
                     continue
                 before = await conn.fetchrow(
-                    "SELECT CASE WHEN quality = 0 THEN value END AS v FROM tag_value "
+                    "SELECT ts, CASE WHEN quality = 0 THEN value END AS v FROM tag_value "
                     "WHERE tag_id = $1 AND ts <= $2 ORDER BY ts DESC LIMIT 1",
                     tag["tag_id"], start)
                 if before is not None:
+                    item["seed"] = before["ts"] < start
                     item["t"].append(start.timestamp())
                     item["v"].append(before["v"])
                 item["t"] += [r["ts"].timestamp() for r in rows]

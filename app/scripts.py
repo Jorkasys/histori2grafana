@@ -73,11 +73,11 @@ class Series:
     которого ряд получен: по ним график кладёт ряд на шкалу исходного тега.
     """
 
-    __slots__ = ("t", "v", "end", "unit", "source", "events", "logical")
+    __slots__ = ("t", "v", "end", "unit", "source", "events", "logical", "seed")
 
     def __init__(self, t: list[float], v: list[float | None], end: float | None = None, *,
                  unit: str | None = None, source: str | None = None, events: bool = False,
-                 logical: bool = False) -> None:
+                 logical: bool = False, seed: bool = False) -> None:
         self.t = t
         self.v = v
         self.end = end if end is not None else (t[-1] if t else 0.0)
@@ -85,6 +85,8 @@ class Series:
         self.source = source
         self.events = events
         self.logical = logical
+        # Перенесённое из прошлого значение нужно для линии, но не является новой записью.
+        self.seed = seed
 
     def derive(self, t: list[float], v: list[float | None], end: float | None = None,
                **changes: Any) -> "Series":
@@ -242,7 +244,11 @@ def _number(value: Any) -> bool:
 # ---------------------------------------------------------------------------
 HELP: list[tuple[str, str, str]] = [
     ("tag", 'tag("имя")', "Берёт значения тега за выбранный период."),
-    ("show", 'show(ряд, "подпись")', "Показывает ряд на графике. Число или текст попадёт в вывод."),
+    ("samples", 'samples("имя")', "Отдельные записи тега внутри периода, без значения из прошлого. "
+     "Для подсчёта взвешиваний, если каждая запись соответствует одной коробке."),
+    ("show", 'show(x, "подпись")', "Ряд показывает на графике, число — карточкой и в Grafana, текст — в выводе."),
+    ("stat", 'stat(число, "подпись", "кг")', "Числовой показатель с подписью и единицей. "
+     "None показывает как отсутствие данных."),
     ("print", "print(…)", "Выводит числа и текст в блок «Вывод»."),
     ("above", "above(ряд, порог)", "Оставляет только значения выше порога, в остальном ряд "
      "прерывается."),
@@ -270,6 +276,13 @@ HELP: list[tuple[str, str, str]] = [
      'значения, "last" последнее.'),
     ("hold", "hold(ряд)", "Держит каждое значение до следующего: из отдельных событий получается "
      "ступенчатый ряд. Разрывы тоже заполняются последним значением."),
+    ("cum_sum", "cum_sum(ряд)", "Накопительная сумма записей с начала выбранного периода. "
+     "Пропуски сохраняются, после них накопление продолжается. События превращаются в ступени."),
+    ("cumsum", "cumsum(ряд)", "То же, что cum_sum(ряд)."),
+    ("diff", "diff(ряд)", "Разность с предыдущей записью. Первая точка и точки после пропусков — None."),
+    ("clip", "clip(x, low=None, high=None)", "Ограничивает число или значения ряда снизу и/или сверху. "
+     "clip(d, low=0) оставляет перевес, clip(-d, low=0) — недовес положительным числом."),
+    ("fill", "fill(ряд, 0)", "Заменяет пропущенные значения указанным числом; новые точки не создаёт."),
     ("const", "const(80, ряд)", "Рисует горизонтальную линию, например порог, на шкале "
      "указанного ряда."),
     ("mean", "mean(ряд)", "Среднее за период с учётом того, сколько держалось каждое значение."),
@@ -416,7 +429,7 @@ class Program:
             if any(isinstance(a, ast.Starred) for a in node.args) or \
                     any(k.arg is None for k in node.keywords):
                 raise ScriptError("распаковка * и ** не поддерживается", line)
-            if node.func.id == "tag":
+            if node.func.id in ("tag", "samples"):
                 if len(node.args) != 1 or node.keywords or not (
                         isinstance(node.args[0], ast.Constant)
                         and isinstance(node.args[0].value, str)):
@@ -431,7 +444,7 @@ class Program:
         run = _Run(self, data, period, tz, deadline or time.monotonic() + MAX_SECONDS)
         for statement in self.tree.body:
             run.statement(statement)
-        return {"outputs": run.outputs, "text": run.text}
+        return {"outputs": run.outputs, "metrics": run.metrics, "text": run.text}
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +460,7 @@ class _Run:
         self.deadline = deadline
         self.env: dict[str, Any] = {}
         self.outputs: list[tuple[str, Series]] = []
+        self.metrics: list[dict[str, Any]] = []
         self.text: list[str] = []
         self.call_node: ast.Call | None = None
         # Ряды, взятые tag() без изменений: на графике подписываются именем тега
@@ -480,8 +494,8 @@ class _Run:
             self.text.append("… вывод сокращён")
 
     def show(self, name: str, series: Series) -> None:
-        if len(self.outputs) >= MAX_OUTPUTS:
-            raise ScriptError(f"на графике не больше {MAX_OUTPUTS} рядов")
+        if len(self.outputs) + len(self.metrics) >= MAX_OUTPUTS:
+            raise ScriptError(f"не больше {MAX_OUTPUTS} рядов и показателей")
         self.outputs.append((name, series))
 
     def when(self, t: float) -> str:
@@ -498,11 +512,15 @@ class _Run:
                 self.env[target.id] = value
             return
         value = self.eval(node.value)
-        # Строка без присваивания — как в блокноте: ряд на график, число в вывод
-        if isinstance(node.value, ast.Call) and node.value.func.id in ("show", "print"):
+        # Строка без присваивания — как в блокноте: ряд на график, число карточкой.
+        if isinstance(node.value, ast.Call) and node.value.func.id in ("show", "print", "stat"):
             return
         if isinstance(value, Series):
             self.show(self.raw_name(value) or self.source(node.value), value)
+        elif _number(value) or value is None:
+            self.metric(value, self.source(node.value))
+            if value is not None:
+                self.say(f"{self.source(node.value)} = {fmt(value)}")
         elif value is not None:
             self.say(f"{self.source(node.value)} = {fmt(value)}")
 
@@ -706,6 +724,30 @@ class _Run:
             return series
         raise ScriptError(found or f"тега «{name}» нет в базе приложения")
 
+    def f_samples(self, name: str) -> Series:
+        s = self.f_tag(name)
+        skip = 1 if self.data[name.strip()].seed else 0
+        return s.derive(s.t[skip:], s.v[skip:], events=True)
+
+    def metric(self, value: Any, name: str, unit: str | None = None) -> None:
+        if value is not None:
+            try:
+                valid = _number(value) and math.isfinite(value)
+            except OverflowError:
+                valid = False
+            if not valid:
+                raise ScriptError("stat: значение — конечное число или None")
+        if len(self.outputs) + len(self.metrics) >= MAX_OUTPUTS:
+            raise ScriptError(f"не больше {MAX_OUTPUTS} рядов и показателей")
+        self.metrics.append({"name": name, "value": value, "unit": unit})
+
+    def f_stat(self, x: Any, name: Any = None, unit: Any = None) -> None:
+        if name is not None and (not isinstance(name, str) or not name.strip()):
+            raise ScriptError("stat: подпись — непустой текст")
+        if unit is not None and not isinstance(unit, str):
+            raise ScriptError("stat: единица — текст, например \"кг\"")
+        self.metric(x, name or self.arg_text(0), unit)
+
     def f_show(self, x: Any, name: Any = None) -> None:
         label = name if isinstance(name, str) and name.strip() else (
             self.raw_name(x) or self.arg_text(0))
@@ -714,6 +756,8 @@ class _Run:
         elif isinstance(x, str):
             self.say(x)
         else:
+            if _number(x) or x is None:
+                self.metric(x, label)
             self.say(f"{label} = {fmt(x)}")
 
     def f_print(self, *items: Any) -> None:
@@ -943,6 +987,63 @@ class _Run:
         s = self.series(x, "hold")
         pairs = [(t, v) for t, v in zip(s.t, s.v) if v is not None]
         return s.derive([p[0] for p in pairs], [p[1] for p in pairs], events=False)
+
+    def f_cum_sum(self, x: Any) -> Series:
+        s = self.series(x, "cum_sum")
+        total = correction = 0.0
+        values = []
+        for i, v in enumerate(s.v):
+            if i % 4096 == 0:
+                self.check_time()
+            if v is None:
+                values.append(None)
+                continue
+            # Компенсация ошибки при длинных рядах мелких отклонений.
+            adjusted = v - correction
+            next_total = total + adjusted
+            correction = (next_total - total) - adjusted
+            total = next_total
+            if not math.isfinite(total):
+                raise ScriptError("cum_sum: сумма слишком велика")
+            values.append(total)
+        return s.derive(list(s.t), values, events=False, logical=False, source=None)
+
+    f_cumsum = f_cum_sum
+
+    def f_diff(self, x: Any) -> Series:
+        s = self.series(x, "diff")
+        values = [None] if s.v else []
+        subtract = _safe(operator.sub)
+        values.extend(subtract(b, a) for a, b in zip(s.v, s.v[1:]))
+        return s.derive(list(s.t), values, logical=False, source=None)
+
+    def f_clip(self, x: Any, low: Any = None, high: Any = None) -> Any:
+        lo = self.optional(low, "clip", "low")
+        hi = self.optional(high, "clip", "high")
+        if any(v is not None and not math.isfinite(v) for v in (lo, hi)):
+            raise ScriptError("clip: границы должны быть конечными")
+        if lo is not None and hi is not None and lo > hi:
+            raise ScriptError("clip: low не может быть больше high")
+
+        def bound(v):
+            if v is None:
+                return None
+            if lo is not None:
+                v = max(v, lo)
+            if hi is not None:
+                v = min(v, hi)
+            return v
+
+        if isinstance(x, Series):
+            return x.derive(list(x.t), [bound(v) for v in x.v], logical=False)
+        return bound(None if x is None else self.number(x, "clip", "аргумент"))
+
+    def f_fill(self, x: Any, value: Any = 0) -> Series:
+        s = self.series(x, "fill")
+        k = self.number(value, "fill", "значение")
+        if not math.isfinite(k):
+            raise ScriptError("fill: значение должно быть конечным")
+        return s.derive(list(s.t), [k if v is None else v for v in s.v], logical=False)
 
     def f_const(self, value: Any, like: Any = None) -> Series:
         k = self.number(value, "const", "значение")
@@ -1197,11 +1298,11 @@ async def run(db, code: str, start: datetime, end: datetime, *, points: int = 10
                           "сократите период".replace(",", " "))
         else:
             data[name] = Series(item["t"], item["v"], item["end"], unit=item["unit"] or None,
-                                source=item["name"])
+                                source=item["name"], seed=item.get("seed", False))
     tz = timezone(timedelta(minutes=-tz_minutes))
     period = (start.timestamp(), end.timestamp())
     deadline = time.monotonic() + MAX_SECONDS
     result = await asyncio.to_thread(program.execute, data, period, tz, deadline)
     return {"outputs": [_output(name, s, points) for name, s in result["outputs"]],
-            "text": result["text"], "tags": program.tags,
+            "metrics": result["metrics"], "text": result["text"], "tags": program.tags,
             "elapsed_ms": round((time.monotonic() - began) * 1000)}

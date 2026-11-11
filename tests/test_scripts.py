@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from app.db import Database
 from app.historian import Tag
 from app.main import create_app
-from app.scripts import Program, ScriptError, Series, _thin
+from app.scripts import Program, ScriptError, Series, _thin, run as run_script
 
 T0 = datetime(2026, 10, 20, 8, 0, tzinfo=timezone.utc).timestamp()
 
@@ -32,6 +32,140 @@ def wave(n: int = 361, step: float = 10.0) -> Series:
     for i in (60, 200, 300):
         v[i] = 95.0
     return Series(t, v, t[-1], unit="°C", source="Line1_Temp")
+
+
+def test_box_weight_accumulation_and_period_metrics():
+    s = Series([T0, T0 + 10, T0 + 20, T0 + 30], [28.4, 27.7, 28.5, 28.0],
+               T0 + 60, unit="кг")
+    res = run('d = samples("W") - 28\n'
+              'show(cum_sum(d), "баланс")\n'
+              'show(cumsum(clip(d, low=0)), "перевес")\n'
+              'show(cum_sum(clip(-d, low=0)), "недовес")\n'
+              'stat(sum(d), "Итого", "кг")', W=s)
+    out = outputs(res)
+    assert out["баланс"].v == pytest.approx([0.4, 0.1, 0.6, 0.6])
+    assert out["перевес"].v == pytest.approx([0.4, 0.4, 0.9, 0.9])
+    assert out["недовес"].v == pytest.approx([0, 0.3, 0.3, 0.3])
+    assert not out["баланс"].events and out["баланс"].unit == "кг"
+    assert out["баланс"].source is None
+    assert res["metrics"][0] == {"name": "Итого", "value": pytest.approx(0.6), "unit": "кг"}
+
+
+def test_samples_excludes_seed_but_keeps_equal_successive_weights():
+    s = Series([T0, T0 + 10, T0 + 20], [28.5, 28.2, 28.2], T0 + 30, seed=True)
+    res = run('w = samples("W")\nshow(w, "записи")\nstat(count(w))\nstat(sum(w - 28))', W=s)
+    assert outputs(res)["записи"].t == [T0 + 10, T0 + 20]
+    assert outputs(res)["записи"].events
+    assert [m["value"] for m in res["metrics"]] == pytest.approx([2, 0.4])
+
+
+def test_weight_at_completion_counts_each_box_once():
+    weight = Series([T0 + i for i in range(6)], [0, 28.3, 28.3, 0, 27.8, 27.8], T0 + 6)
+    ready = Series([T0, T0 + 2, T0 + 3, T0 + 5], [0, 1, 0, 1], T0 + 6)
+    res = run('w = where(tag("W"), crossings(tag("R"), 0.5, "up"))\n'
+              'show(cum_sum(w - 28), "баланс")\nstat(count(w))', W=weight, R=ready)
+    assert outputs(res)["баланс"].v == pytest.approx([0.3, 0.1])
+    assert res["metrics"][0]["value"] == 2
+
+
+def test_cumulative_gaps_empty_and_precision():
+    s = Series([T0 + i for i in range(5)], [None, 0.5, None, -0.2, 0.1], T0 + 10,
+               events=True, logical=True)
+    out = outputs(run('show(cum_sum(tag("S")), "c")\nshow(diff(tag("S")), "d")', S=s))
+    assert out["c"].v[:3] == [None, 0.5, None]
+    assert out["c"].v[3:] == pytest.approx([0.3, 0.4])
+    assert not out["c"].events and not out["c"].logical
+    assert out["d"].v[:4] == [None] * 4
+    assert out["d"].v[-1] == pytest.approx(0.3)
+    empty = outputs(run('show(cum_sum(tag("S")), "c")', S=Series([], [])))
+    assert empty["c"].v == []
+    long = Series(list(range(100_000)), [0.1] * 100_000)
+    assert outputs(run('show(cumsum(tag("S")), "c")', S=long))["c"].v[-1] == 10_000
+
+
+@pytest.mark.asyncio
+async def test_accumulation_uses_raw_records_before_chart_thinning():
+    class DB:
+        async def raw_values(self, names, start, end, limit):
+            return {"W": {"name": "W", "unit": "кг", "datatype": "float64",
+                          "t": [T0 + i / 10 for i in range(10_000)], "v": [28.1] * 10_000,
+                          "end": end.timestamp(), "too_many": False}}
+
+    code = 'd = samples("W") - 28\nshow(cum_sum(d))\nstat(sum(d))'
+    start = datetime.fromtimestamp(T0, timezone.utc)
+    result = await run_script(DB(), code, start, start + timedelta(hours=1), points=10)
+    assert len(result["outputs"][0]["v"]) < 100
+    assert result["outputs"][0]["v"][-1] == pytest.approx(1000)
+    assert result["metrics"][0]["value"] == pytest.approx(1000)
+
+
+def test_clip_fill_and_numeric_results():
+    s = Series([T0 + i for i in range(4)], [-2, None, 1, 4], unit="кг", events=True)
+    res = run('show(fill(clip(tag("S"), 0, 2), 0), "c")\n'
+              'show(0, "Ноль")\nstat(last(tag("Empty")), "Нет", "кг")\n'
+              'max(tag("S"))\nprint("только текст", 42)\nstat(clip(-5, low=0))',
+              S=s, Empty=Series([], []))
+    assert outputs(res)["c"].v == [0, 0, 1, 2]
+    assert outputs(res)["c"].events and outputs(res)["c"].unit == "кг"
+    assert [m["value"] for m in res["metrics"]] == [0, None, 4, 0]
+    assert res["text"] == ["Ноль = 0", "max(tag(\"S\")) = 4", "только текст 42"]
+
+
+@pytest.mark.parametrize("code", [
+    'cum_sum(1)', 'clip(1, low=2, high=1)', 'fill(tag("S"), "x")',
+    'stat(tag("S"))', 'stat("текст")', 'stat(1, "")', 'stat(1, unit=3)',
+    'stat(1e309)', 'clip(1, high=1e309)',
+])
+def test_new_functions_report_script_errors(code):
+    with pytest.raises(ScriptError) as exc:
+        run(code, S=wave())
+    assert exc.value.line == 1
+
+
+def test_metrics_share_output_limit():
+    with pytest.raises(ScriptError, match="не больше"):
+        run('\n'.join('stat(0)' for _ in range(21)))
+
+
+def test_samples_api_respects_real_period_boundaries(test_settings):
+    import asyncio
+
+    start = datetime(2026, 11, 1, tzinfo=timezone.utc)
+
+    async def prepare():
+        db = Database(test_settings)
+        await db.connect()
+        try:
+            await db.upsert_tags([Tag("Weight", "Вес", "кг", "float64")])
+            _, tags = await db.list_tags()
+            tag_id = tags[0]["tag_id"]
+            await db.write_window([tag_id], start - timedelta(seconds=2),
+                                  start + timedelta(seconds=40), [
+                (start - timedelta(seconds=1), tag_id, 28.5, None, 0),
+                (start + timedelta(seconds=10), tag_id, 28.2, None, 0),
+                (start + timedelta(seconds=20), tag_id, 28.2, None, 0),
+                (start + timedelta(seconds=30), tag_id, 29.0, None, 1),
+            ])
+        finally:
+            await db.close()
+
+    asyncio.run(prepare())
+    with TestClient(create_app(test_settings)) as client:
+        period = {"from": start.isoformat(), "to": (start + timedelta(seconds=40)).isoformat()}
+        code = 'w = samples("Weight")\nshow(w, "записи")\nshow(cum_sum(w - 28), "баланс")\nstat(sum(w - 28), "Итого", "кг")'
+        result = client.post("/api/scripts/run", json={**period, "code": code})
+        assert result.status_code == 200
+        result = result.json()
+        assert result["outputs"][0]["v"] == [28.2, 28.2, None]
+        assert result["metrics"] == [{"name": "Итого", "value": pytest.approx(0.4), "unit": "кг"}]
+        # Реальная запись точно на начале окна включается, перенос из прошлого исключается.
+        period["from"] = (start + timedelta(seconds=10)).isoformat()
+        result = client.post("/api/scripts/run", json={**period, "code": code}).json()
+        assert result["outputs"][0]["v"] == [28.2, 28.2, None]
+        period["from"] = (start + timedelta(seconds=11)).isoformat()
+        result = client.post("/api/scripts/run", json={**period, "code": code}).json()
+        assert result["outputs"][0]["v"] == [28.2, None]
+        assert result["metrics"][0]["value"] == pytest.approx(0.2)
 
 
 def test_peaks_threshold_and_distance():

@@ -4,6 +4,7 @@
 // рамкой и то и другое. Двойной щелчок возвращает масштаб.
 
 import { clear, dateTime, el, icon, keepFocus, num, recall, remember } from './core.js';
+import { metricCards } from './metrics.js';
 
 export const PENS = ['#1f5aa6', '#c0392b', '#2e7d32', '#7b3fa0', '#b26a00', '#00838f',
   '#6d4c41', '#546e7a'];
@@ -170,9 +171,10 @@ export class Trend {
     this.looksBox = el('div', { class: 'scales looks', hidden: true });
     this.body = el('div', { class: 'trend-body', role: 'img' });
     this.extra = el('div', { class: 'texts' });
+    this.metricsBox = el('div', {});
     this.node = el('section', { class: 'trend' },
       el('div', { class: 'trend-head' }, this.title, this.spin, this.time, this.tools),
-      this.legend, this.looksBox, this.scalesBox, this.body, this.extra);
+      this.legend, this.looksBox, this.scalesBox, this.metricsBox, this.body, this.extra);
     this.node.addEventListener('mousedown', () => this.opts.onActivate && this.opts.onActivate());
     host.append(this.node);
     this.observer = new ResizeObserver(() => this.resize());
@@ -195,6 +197,11 @@ export class Trend {
   // error: загрузка не удалась — пишем причину на месте графика, если рисовать нечего
   setLoading(on, error = null) {
     this.spin.hidden = !on;
+    if (error) {
+      clear(this.metricsBox);
+      this.metrics = [];
+      this.body.hidden = false;
+    }
     if (this.plot) return;
     if (on) clear(this.body).append(el('div', { class: 'trend-empty' }, 'Загружаю значения…'));
     else if (error) {
@@ -210,7 +217,8 @@ export class Trend {
   }
 
   // --- данные -------------------------------------------------------------------
-  update(specs, window, notes = []) {
+  update(specs, window, notes = [], metrics = []) {
+    this.metrics = metrics;
     this.window = window;
     this.raw = specs;
     this.specs = specs.map((s) => styled(s, window));
@@ -218,6 +226,31 @@ export class Trend {
     this.scaleKeys = [];
     for (const s of this.specs) if (!this.scaleKeys.includes(s.scale)) this.scaleKeys.push(s.scale);
     this.spin.hidden = true;
+    const stat = this.opts.mode === 'stat';
+    this.looksButton.hidden = stat;
+    this.scalesButton.hidden = stat;
+    if (stat) {
+      this.looksBox.hidden = true;
+      this.scalesBox.hidden = true;
+    }
+    clear(this.metricsBox);
+    const cards = [...metrics];
+    if (stat) {
+      for (const s of specs) {
+        const value = s.v.findLast((v) => v !== null && v !== undefined);
+        cards.push({ name: s.label, value: value ?? null, unit: s.unit, item: s.item });
+      }
+    }
+    if (cards.length) this.metricsBox.append(metricCards(cards, this.opts.onRemove));
+    this.body.hidden = stat || (!specs.length && cards.length > 0);
+    if (stat) {
+      if (this.plot) this.plot.destroy();
+      this.plot = null;
+      this.signature = '';
+      this.renderLegend();
+      if (!cards.length) this.metricsBox.append(el('p', { class: 'muted' }, this.opts.empty));
+      return;
+    }
     // Для экранного диктора: что нарисовано и за какой период
     this.body.setAttribute('aria-label', specs.length
       ? `${this.title.textContent || 'График'}: ${specs.map((s) => s.label).join(', ')}; ` +
@@ -442,7 +475,7 @@ export class Trend {
   setLook(spec, patch) {
     saveLook(spec.look, patch);
     if (this.opts.onLook) this.opts.onLook();
-    else this.update(this.raw, this.window, this.notes);
+    else this.update(this.raw, this.window, this.notes, this.metrics);
     keepFocus(this.looksBox, () => this.renderLooks());
   }
 
@@ -509,6 +542,7 @@ export class Trend {
     clear(this.legend);
     this.items = [];
     this.specs.forEach((s, i) => {
+      if (this.opts.mode === 'stat') return;
       const val = el('span', { class: 'lg-val' });
       const item = el('span', { class: `lg${this.hidden.has(s.key) ? ' off' : ''}`,
         style: `--c:${s.color}` },
