@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Скрипты: руководство для начинающих</title>
   <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <script src="../theme.js"></script>
   <link rel="stylesheet" href="../style.css">
   <link rel="stylesheet" href="guide.css">
 </head>
@@ -300,6 +301,7 @@ show(where(t, t &gt; 45 and t &lt; 55), &quot;от 45 до 55&quot;)</pre>
 <tr><td><code>rate(ряд, &quot;1m&quot;)</code></td><td>Скорость изменения за минуту (час и т. д.)</td><td><code>rate(t, &quot;1h&quot;)</code></td></tr>
 <tr><td><code>shift(ряд, &quot;10m&quot;)</code></td><td>Сдвигает по времени</td><td><code>shift(a, &quot;-5m&quot;)</code></td></tr>
 <tr><td><code>resample(ряд, &quot;1h&quot;, &quot;mean&quot;)</code></td><td>Приводит к ровному шагу: &quot;mean&quot; для среднего, а также &quot;min&quot;, &quot;max&quot;, &quot;last&quot;</td><td><code>resample(t, &quot;1h&quot;, &quot;max&quot;)</code>: максимум за каждый час</td></tr>
+<tr><td><code>aggregate(ряд, &quot;week&quot;, &quot;sum&quot;, tz=&quot;Europe/Moscow&quot;)</code></td><td>Календарные сутки, недели или месяцы. Неделя начинается в понедельник. Если не указан пояс, используется UTC</td><td><code>aggregate(d, &quot;day&quot;, &quot;sum&quot;)</code></td></tr>
 <tr><td><code>hold(ряд)</code></td><td>Держит каждое значение до следующего: из событий получаются ступени</td><td><code>hold(where(t, on))</code></td></tr>
 <tr><td><code>cum_sum(ряд)</code>, <code>cumsum(ряд)</code></td><td>Накопительная сумма записей; события превращает в ступени. Пропуски сохраняет и затем продолжает накопление</td><td><code>cum_sum(w - 28)</code></td></tr>
 <tr><td><code>diff(ряд)</code></td><td>Разность соседних записей. Первая точка и точка после пропуска — None</td><td><code>diff(counter)</code></td></tr>
@@ -321,6 +323,8 @@ show(where(t, t &gt; 45 and t &lt; 55), &quot;от 45 до 55&quot;)</pre>
 <tr><td><code>count(ряд)</code></td><td>Сколько значений (или событий)</td><td><code>count(peaks(t))</code></td></tr>
 <tr><td><code>sum(ряд)</code></td><td>Сумма значений</td><td><code>sum(p)</code></td></tr>
 <tr><td><code>last(ряд)</code></td><td>Последнее значение</td><td><code>last(t)</code></td></tr>
+<tr><td><code>first(ряд)</code></td><td>Первое значение без пропусков</td><td><code>first(t)</code></td></tr>
+<tr><td><code>integral(ряд, &quot;1h&quot;)</code></td><td>Сумма значения, умноженного на время. Пропуски не учитываются</td><td><code>integral(flow, &quot;1h&quot;)</code></td></tr>
 <tr><td><code>duration(условие, &quot;h&quot;)</code></td><td>Сколько времени условие выполнялось: &quot;h&quot; в часах, &quot;min&quot; в минутах, &quot;s&quot; в секундах</td><td><code>duration(t &gt; 55, &quot;min&quot;)</code></td></tr>
 </tbody></table></div>
 <h3>Связь тегов</h3>
@@ -333,6 +337,14 @@ show(where(t, t &gt; 45 and t &lt; 55), &quot;от 45 до 55&quot;)</pre>
 <tr><td><code>fit(y, x1, x2, …)</code></td><td>Линейную модель: печатает формулу и R² и возвращает расчётный ряд</td><td><code>show(fit(i, t), &quot;модель&quot;)</code></td></tr>
 </tbody></table></div>
 <h2 id="10-результат-скрипта-на-графиках">10. Результат скрипта на графиках</h2>
+<h3>Итоги по суткам, неделям и месяцам</h3>
+<pre class="output">d = samples(&quot;line2::Box_Weight&quot;) - 28
+show(aggregate(d, &quot;day&quot;, &quot;sum&quot;, tz=&quot;Europe/Moscow&quot;), &quot;Баланс по суткам, кг&quot;)
+show(aggregate(d, &quot;week&quot;, &quot;sum&quot;, tz=&quot;Europe/Moscow&quot;), &quot;Баланс по неделям, кг&quot;)</pre>
+<p>Замените line2::Box_Weight именем тега веса. Префикс line2 относится к дополнительному источнику Historian. Для основного источника укажите имя тега без префикса.</p>
+<p>Для периода используются day, week или month. Способы вычисления: sum, count, mean, min, max, first и last берут отдельные записи, а time_mean взвешивает значения по длительности непрерывного ряда. Для суммы взвешиваний берите samples, чтобы исключить значение из прошлого.</p>
+<p>Начальный и конечный интервалы могут быть неполными. Запись на границе относится к следующему интервалу. Запись ровно в конце выбранного периода не учитывается. Интервалы без значений выводятся пропуском. Часовой пояс укажите явно, чтобы отчёты совпадали в приложении и Grafana.</p>
+<p>Если тег хранит расход в т/ч, результат stat(integral(tag(&quot;Flow&quot;), &quot;1h&quot;), &quot;Объём&quot;, &quot;т&quot;) даст количество тонн за выбранное время.</p>
 <h3>Накопленный перевес и недовес коробок</h3>
 <p>Если каждая запись тега — одно завершённое взвешивание коробки, используйте этот скрипт. Замените Box_Weight своим тегом веса. Целевой вес — 28 кг.</p>
 <pre class="output">w = samples(&quot;Box_Weight&quot;)

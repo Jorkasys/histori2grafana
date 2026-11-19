@@ -11,7 +11,8 @@
   вставить одной транзакцией. Поэтому повторное чтение безопасно и дублей
   не бывает. Значения, которые историк дописал с опозданием, подтягиваются
   перекрытием окна (``overlap_s``), а раз в 10 минут приложение ещё и
-  перечитывает последние 15 минут.
+  перечитывает последние 15 минут. В обычном PostgreSQL совпавшие строки
+  сохраняются на месте, а изменения применяются той же транзакцией.
 """
 
 from __future__ import annotations
@@ -40,11 +41,12 @@ def utcnow() -> datetime:
 
 
 class Copier:
-    """Фоновое копирование. Один экземпляр на приложение."""
+    """Фоновое копирование одного Historian с собственными тегами и расписанием."""
 
     def __init__(self, db, *, historian_factory: Callable[[dict], Historian] = Historian,
-                 clock: Callable[[], datetime] = utcnow) -> None:
+                 clock: Callable[[], datetime] = utcnow, source: str = "main") -> None:
         self.db = db
+        self.source = source
         self.historian_factory = historian_factory
         self.clock = clock
         self.config: dict[str, Any] = {}
@@ -86,7 +88,7 @@ class Copier:
         self._stop = asyncio.Event()
         self.event("info", f"Копирование запущено: сервер {config.get('server')}, "
                            f"раз в {config.get('poll_s')} с")
-        self._task = asyncio.create_task(self.run(), name="copier")
+        self._task = asyncio.create_task(self.run(), name=f"copier:{self.source}")
 
     async def stop(self, quiet: bool = False) -> None:
         was_running = self.running
@@ -110,7 +112,7 @@ class Copier:
 
     def event(self, level: str, text: str) -> None:
         self.events.appendleft({"ts": time.time(), "level": level, "text": text})
-        getattr(log, "warning" if level == "error" else "info")(text)
+        getattr(log, "warning" if level == "error" else "info")("[%s] %s", self.source, text)
 
     def status(self) -> dict[str, Any]:
         return {
@@ -225,7 +227,7 @@ class Copier:
 
     async def _refresh_tags(self, historian: Historian) -> None:
         tags = await historian.list_tags()
-        self._ids = await self.db.upsert_tags(tags)
+        self._ids = await self.db.upsert_tags(tags, source=self.source)
         self._tags = {t.name: t for t in tags}
         self._tags_loaded_at = time.monotonic()
         if not tags:
@@ -237,8 +239,8 @@ class Copier:
     async def _ensure_historian(self) -> Historian:
         if self._historian is None:
             historian = self.historian_factory(self.config)
-            await historian.open()
             self._historian = historian
+            await historian.open()
             self._tags_loaded_at = 0.0
             self.event("ok", "Подключено к историку")
         return self._historian

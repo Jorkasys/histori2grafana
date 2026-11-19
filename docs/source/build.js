@@ -239,6 +239,7 @@ function html(content, images) {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${esc(heading)}</title>
   <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <script src="../theme.js"></script>
   <link rel="stylesheet" href="../style.css">
   <link rel="stylesheet" href="guide.css">
 </head>

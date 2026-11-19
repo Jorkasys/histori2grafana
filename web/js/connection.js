@@ -3,6 +3,7 @@
 import {
   clear, confirmDialog, count, dateTime, el, fail, get, icon, post, put, shared, toast,
 } from './core.js';
+import { sourceOf, sourcePicker, sourceQuery } from './sources.js';
 
 const AUTH = [
   ['sql', 'Логин SQL Server',
@@ -29,8 +30,11 @@ function select(options, value) {
 }
 
 export async function connectionPage(view) {
-  const [config, status] = await Promise.all([get('/settings'), get('/status')]);
-  shared.settings = config;
+  const { items } = await get('/sources');
+  const source = sourceOf(items).id;
+  const query = sourceQuery(source);
+  const [config, status] = await Promise.all([get(`/settings?${query}`), get(`/status?${query}`)]);
+  if (source === 'main') shared.settings = config;
   const running = status.copy.running;
 
   const f = {
@@ -191,7 +195,7 @@ export async function connectionPage(view) {
         'Проверяю: подключение, список тегов, чтение значений за 10 минут… ' +
         'Если сервер не отвечает, это займёт до 15 секунд.')));
     try {
-      const report = await busy(btnTest, 'Проверяю…', () => post('/test', values()));
+      const report = await busy(btnTest, 'Проверяю…', () => post(`/test?${query}`, values()));
       clear(result).append(el('section', { class: 'protocol', 'aria-label': 'Протокол проверки' },
         el('div', { class: 'protocol-head' },
           el('h2', {}, report.ok ? 'Подключение работает' : 'Подключение не удалось'),
@@ -214,9 +218,10 @@ export async function connectionPage(view) {
   async function save() {
     if (!valid(false)) return;
     try {
-      shared.settings = await busy(btnSave, 'Сохраняю…', () => put('/settings', values()));
+      const saved = await busy(btnSave, 'Сохраняю…', () => put(`/settings?${query}`, values()));
+      if (source === 'main') shared.settings = saved;
       f.password.value = '';
-      f.password.placeholder = shared.settings.password_set ? SAVED_PASSWORD : '';
+      f.password.placeholder = saved.password_set ? SAVED_PASSWORD : '';
       markSaved();
       toast('Настройки сохранены. Копирование не запущено', 'ok');
     } catch (error) { fail(error); }
@@ -226,12 +231,12 @@ export async function connectionPage(view) {
     if (!valid(true)) return;
     try {
       await busy(btnStart, running ? 'Перезапускаю…' : 'Запускаю…',
-        () => post('/copy/start', values()));
-      shared.settings = await get('/settings');
+        () => post(`/copy/start?${query}`, values()));
+      if (source === 'main') shared.settings = await get('/settings');
       f.password.value = '';
       markSaved();
       toast(running ? 'Сохранено, копирование перезапущено' : 'Копирование запущено', 'ok');
-      location.hash = '#/loading';
+      location.hash = `#/loading?${query}`;
     } catch (error) { fail(error); }
   }
 
@@ -257,8 +262,27 @@ export async function connectionPage(view) {
       field('overlap_s', 'Перекрытие, с', 'При каждом опросе немного перечитывать уже ' +
         'скопированное, чтобы подхватить значения, пришедшие с опозданием. Обычно 30.')));
 
+  const sourceId = el('input', { id: 'source-id', maxlength: 32, required: true, placeholder: 'line2',
+    autocomplete: 'off' });
+  const addButton = el('button', { type: 'submit' }, 'Добавить');
+  const addForm = el('form', { class: 'toolbar', onsubmit: async (event) => {
+    event.preventDefault();
+    try {
+      if (changed() && !await confirmDialog('Несохранённые настройки',
+        'При переходе к новому источнику изменения в этой форме будут потеряны.', 'Продолжить')) return;
+      const added = await busy(addButton, 'Добавляю…', () => post('/sources', { id: sourceId.value }));
+      f.password.value = '';
+      markSaved();
+      location.hash = `#/connection?${sourceQuery(added.id)}`;
+    } catch (error) { fail(error); }
+  } }, el('label', { for: 'source-id' }, 'Имя источника'), sourceId, addButton);
+
   view.append(
     el('h1', {}, 'Подключение к AVEVA Historian'),
+    el('div', { class: 'toolbar' }, sourcePicker(items, source, 'connection'),
+      el('details', { class: 'source-add' }, el('summary', {}, 'Добавить Historian'), addForm,
+        el('p', { class: 'hint' }, 'Имя используется в тегах, например line2::Box_Weight. ' +
+          'Начните с латинской буквы. Допустимы цифры, дефис и подчёркивание.'))),
     el('p', { class: 'lead' }, 'Заполните три раздела, проверьте подключение и запустите ' +
       'копирование. Приложение только читает историк и ничего в него не записывает.'),
 
@@ -301,7 +325,7 @@ export async function connectionPage(view) {
 
     el('div', { class: 'actions' }, btnTest, btnStart, btnSave,
       running ? el('span', { class: 'muted' }, 'Копирование идёт. Остановить его можно на ',
-        el('a', { href: '#/loading' }, 'странице «Копирование»'), '.') : null),
+        el('a', { href: `#/loading?${query}` }, 'странице «Копирование»'), '.') : null),
     result,
   );
   drawRetrieval();

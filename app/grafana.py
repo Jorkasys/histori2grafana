@@ -107,7 +107,15 @@ async def _catalog(db) -> dict[str, dict[str, Any]]:
     """Все листья дерева: {полный путь: что это}."""
     out: dict[str, dict[str, Any]] = {}
     for tag in await db.chart_tags():
-        out.setdefault(f"{TAGS}.{tag_path(tag['name'])}", {"tag": tag})
+        source = tag.get("source_id", "main")
+        name = tag["name"]
+        path = (f"{TAGS}.{tag_path(name)}" if source == "main"
+                else f"Источники.{source}.{tag_path(name.partition('::')[2])}")
+        if path in out and source != "main":
+            path = f"{path}_{tag['tag_id']}"
+            while path in out:
+                path += "_"
+        out.setdefault(path, {"tag": tag})
     for name, item in script_nodes(await db.list_scripts()).items():
         out[f"{SCRIPTS}.{name}"] = {"script": item}
     return out

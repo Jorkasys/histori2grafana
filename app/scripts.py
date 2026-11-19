@@ -30,6 +30,7 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 MAX_CODE = 20_000          # символов в скрипте
 MAX_NODES = 3_000          # элементов разбора
@@ -274,6 +275,11 @@ HELP: list[tuple[str, str, str]] = [
     ("resample", 'resample(ряд, "1m", "mean")',
      'Приводит ряд к ровному шагу: "mean" берёт среднее за шаг, "min" и "max" крайние '
      'значения, "last" последнее.'),
+    ("aggregate", 'aggregate(ряд, "week", "sum", tz="Europe/Moscow")',
+     'Календарные сутки (day), недели с понедельника (week) или месяцы (month). '
+     'Способы: sum, count, mean, min, max, first, last, time_mean. Пояс по умолчанию UTC.'),
+    ("integral", 'integral(ряд, "1h")',
+     'Сумма произведений значения на время с данными. Для расхода в т/ч даст тонны.'),
     ("hold", "hold(ряд)", "Держит каждое значение до следующего: из отдельных событий получается "
      "ступенчатый ряд. Разрывы тоже заполняются последним значением."),
     ("cum_sum", "cum_sum(ряд)", "Накопительная сумма записей с начала выбранного периода. "
@@ -294,6 +300,7 @@ HELP: list[tuple[str, str, str]] = [
     ("count", "count(ряд)", "Сколько в ряду значений. count(peaks(t)) считает пики."),
     ("sum", "sum(ряд)", "Сумма значений."),
     ("last", "last(ряд)", "Последнее значение."),
+    ("first", "first(ряд)", "Первое значение без пропусков."),
     ("duration", 'duration(t > 80, "h")',
      'Сколько времени условие выполнялось (или ряд имел значения). Единицы: "h" часы, "min" '
      'минуты, "s" секунды.'),
@@ -983,6 +990,78 @@ class _Run:
                     values.append(inside[-1])
         return s.derive(times, values, events=False)
 
+    def f_aggregate(self, x: Any, period: Any, how: Any = "mean", tz: Any = "UTC") -> Series:
+        s = self.series(x, "aggregate")
+        if period not in ("day", "week", "month"):
+            raise ScriptError('aggregate: период — "day", "week" или "month"')
+        if how not in ("sum", "count", "mean", "min", "max", "first", "last", "time_mean"):
+            raise ScriptError("aggregate: способ — sum, count, mean, min, max, first, last или time_mean")
+        if how == "time_mean" and s.events:
+            raise ScriptError("aggregate: для time_mean нужен непрерывный ряд")
+        try:
+            zone = ZoneInfo(tz) if isinstance(tz, str) and len(tz) <= 100 else None
+        except (ZoneInfoNotFoundError, ValueError):
+            zone = None
+        if zone is None:
+            raise ScriptError('aggregate: укажите часовой пояс, например "UTC" или "Europe/Moscow"')
+
+        start, end = self.period
+        # Календарные границы в местном времени, в том числе при переводе часов.
+        day = datetime.fromtimestamp(start, zone).replace(hour=0, minute=0, second=0, microsecond=0)
+        if period == "week":
+            day -= timedelta(days=day.weekday())
+        elif period == "month":
+            day = day.replace(day=1)
+        times, values = [], []
+        i = bisect.bisect_left(s.t, start)
+        at = self._integrals(s) if how == "time_mean" else None
+        while day.timestamp() < end:
+            self.check_time()
+            left = max(start, day.timestamp())
+            if period == "month":
+                day = (day + timedelta(days=32)).replace(day=1)
+            else:
+                day += timedelta(days=7 if period == "week" else 1)
+            right = min(end, day.timestamp())
+            if right <= left:
+                continue
+            if at is not None:
+                a0, d0 = at(left)
+                a1, d1 = at(right)
+                result = (a1 - a0) / (d1 - d0) if d1 > d0 else None
+            else:
+                j = bisect.bisect_left(s.t, right, lo=i)
+                vals = [v for v in s.v[i:j] if v is not None]
+                i = j
+                if how == "count":
+                    result = len(vals) if vals else None
+                elif not vals:
+                    result = None
+                elif how == "sum" or how == "mean":
+                    result = sum(vals) / (len(vals) if how == "mean" else 1)
+                elif how == "min":
+                    result = min(vals)
+                elif how == "max":
+                    result = max(vals)
+                else:
+                    result = vals[0] if how == "first" else vals[-1]
+            times.append(left)
+            values.append(result if result is None or math.isfinite(result) else None)
+        return Series(times, values, end, unit=None if how == "count" else s.unit)
+
+    def f_integral(self, x: Any, per: Any = "1h") -> float | None:
+        s = self.series(x, "integral")
+        if s.events:
+            raise ScriptError("integral: нужен непрерывный ряд; для событий используйте sum")
+        width = seconds(per, "integral: единица времени")
+        if not math.isfinite(width) or width <= 0:
+            raise ScriptError("integral: единица времени должна быть больше нуля")
+        start, end = self.period
+        at = self._integrals(s)
+        a0, d0 = at(start)
+        a1, d1 = at(end)
+        return (a1 - a0) / width if d1 > d0 else None
+
     def f_hold(self, x: Any) -> Series:
         s = self.series(x, "hold")
         pairs = [(t, v) for t, v in zip(s.t, s.v) if v is not None]
@@ -1126,6 +1205,9 @@ class _Run:
     def f_last(self, x: Any) -> float | None:
         vals = self._values(x, "last")
         return vals[-1] if vals else None
+
+    def f_first(self, x: Any) -> float | None:
+        return next((v for v in self.series(x, "first").v if v is not None), None)
 
     def f_duration(self, x: Any, unit: Any = "h") -> float:
         s = self.series(x, "duration")

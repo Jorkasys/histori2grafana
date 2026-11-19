@@ -8,13 +8,12 @@ import { metricCards } from './metrics.js';
 
 export const PENS = ['#1f5aa6', '#c0392b', '#2e7d32', '#7b3fa0', '#b26a00', '#00838f',
   '#6d4c41', '#546e7a'];
+const DARK_PENS = ['#8ac6fa', '#ff9d96', '#86d6a5', '#d0adf5', '#f2c27e', '#7cdbd7',
+  '#e4ad95', '#b1c5d6'];
 export const HEIGHTS = { low: 170, normal: 260, high: 420 };
 const DRAWS = [['steps', 'ступени'], ['line', 'линия'], ['points', 'точки']];
 const WIDTHS = [[1, 'тонкая'], [1.6, 'обычная'], [2.6, 'толстая']];
 const LOOKS = 'looks';
-const AXIS = '#5f6b77';
-const GRID = '#d6e0dc';
-const MINOR = '#edf2f0';
 const FONT = '12px Bahnschrift, "Segoe UI", Arial, sans-serif';
 
 // Подписи оси времени по-русски, 24 часа: на коротких периодах с секундами,
@@ -111,6 +110,9 @@ function styled(s, window) {
   const out = { ...s, look: s.look || s.key, draw, width: look.width || 1.6, fill: !!look.fill,
     colorSet: look.color !== undefined, canBand: !!s.lo };
   if (out.colorSet) out.color = PENS[look.color % PENS.length];
+  out.exportColor = out.color;
+  const index = PENS.indexOf(out.color);
+  if (index >= 0 && document.documentElement.dataset.theme === 'dark') out.color = DARK_PENS[index];
   if (draw === 'points' || look.band === false) {
     out.lo = null;
     out.hi = null;
@@ -179,6 +181,13 @@ export class Trend {
     host.append(this.node);
     this.observer = new ResizeObserver(() => this.resize());
     this.observer.observe(this.body);
+    this.onTheme = () => {
+      if (this.window && this.raw) {
+        this.signature = '';
+        this.update(this.raw, this.window, this.notes, this.metrics);
+      }
+    };
+    document.addEventListener('theme-change', this.onTheme);
   }
 
   addTool(node) {
@@ -291,13 +300,18 @@ export class Trend {
     if (this.plot) this.plot.destroy();
     clear(this.body);
     const paths = { steps: uPlot.paths.stepped({ align: 1 }), line: uPlot.paths.linear() };
+    const css = getComputedStyle(this.node);
+    const axisColor = css.getPropertyValue('--ink-3').trim();
+    const grid = css.getPropertyValue('--grid').trim();
+    this.minor = css.getPropertyValue('--grid-minor').trim();
+    this.paper = css.getPropertyValue('--paper').trim();
     const several = this.scaleKeys.length > 1;
     const scales = {
       x: { time: true, range: (_u, min, max) => (this.window ? [...this.window] : [min, max]) },
     };
     const axes = [{
-      scale: 'x', stroke: AXIS, font: FONT, size: 30, space: 70, values: timeTicks,
-      grid: { stroke: GRID, width: 1 }, ticks: { stroke: GRID, width: 1, size: 4 },
+      scale: 'x', stroke: axisColor, font: FONT, size: 30, space: 70, values: timeTicks,
+      grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1, size: 4 },
     }];
     this.scaleKeys.forEach((key, i) => {
       const first = this.specs.find((s) => s.scale === key);
@@ -309,9 +323,9 @@ export class Trend {
       };
       const axis = {
         scale: key, side: i % 2 ? 1 : 3, font: FONT, values: valueTicks, size: axisSize,
-        stroke: several ? first.color : AXIS,
-        grid: { show: i === 0, stroke: GRID, width: 1 },
-        ticks: { stroke: GRID, width: 1, size: 4 },
+        stroke: several ? first.color : axisColor,
+        grid: { show: i === 0, stroke: grid, width: 1 },
+        ticks: { stroke: grid, width: 1, size: 4 },
       };
       if (bool) {
         axis.splits = () => [0, 1];
@@ -330,7 +344,7 @@ export class Trend {
         series.push({ label: s.label, scale: s.scale, show, stroke: s.color, width: 1,
           paths: () => null,
           points: { show: true, size: 5 + s.width * 2, width: 1.6, stroke: s.color,
-            fill: s.fill ? s.color : '#ffffff' } });
+            fill: s.fill ? s.color : this.paper } });
         continue;
       }
       series.push({ label: s.label, scale: s.scale, show, stroke: s.color, width: s.width,
@@ -489,7 +503,7 @@ export class Trend {
   // рассчитаны на белый фон, а у Grafana свои цвета под тёмную тему
   describeLooks() {
     return this.specs.map((s) => ({ name: s.label, draw: s.draw, width: s.width, fill: s.fill,
-      bool: !!s.bool, color: s.colorSet ? s.color : null }));
+      bool: !!s.bool, color: s.colorSet ? s.exportColor : null }));
   }
 
   renderLooks() {
@@ -617,7 +631,7 @@ export class Trend {
     const ctx = u.ctx;
     const { left, top, width, height } = u.bbox;
     ctx.save();
-    ctx.strokeStyle = MINOR;
+    ctx.strokeStyle = this.minor;
     ctx.lineWidth = 1;
     ctx.beginPath();
     const lines = (axis, scale, vertical) => {
@@ -666,7 +680,7 @@ export class Trend {
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);
       ctx.fillStyle = s.color;
-      ctx.strokeStyle = '#ffffff';
+      ctx.strokeStyle = this.paper;
       ctx.lineWidth = 1.5 * px;
       ctx.fill();
       ctx.stroke();
@@ -684,6 +698,7 @@ export class Trend {
   }
 
   destroy() {
+    document.removeEventListener('theme-change', this.onTheme);
     this.observer.disconnect();
     if (this.plot) this.plot.destroy();
     this.plot = null;

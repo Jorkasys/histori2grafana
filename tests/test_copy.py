@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 import emulator
 from app.db import Database
-from app.historian import SQLITE, Historian
+from app.historian import SQLITE, Historian, HistorianError, Point, Tag
 from app.main import create_app
 from app.sync import Copier
 
@@ -38,6 +38,105 @@ async def counts(db: Database) -> dict[str, tuple[int, int]]:
             "SELECT t.name, (SELECT count(*) FROM tag_value v WHERE v.tag_id = t.tag_id) AS n, "
             "s.row_count FROM tag t LEFT JOIN tag_sync s USING (tag_id)")
     return {r["name"]: (r["n"], r["row_count"]) for r in rows}
+
+
+async def test_postgres_overlap_keeps_unchanged_rows_and_applies_corrections(test_settings):
+    db = Database(test_settings)
+    await db.connect(wait_s=5)
+    try:
+        if db.timescale:
+            pytest.skip("проверка физического хранения обычного PostgreSQL")
+        tag = (await db.upsert_tags([Tag("Weight")]))["Weight"]
+        start, end = T0, T0 + timedelta(minutes=1)
+        a, b, c, d = (start + timedelta(seconds=i) for i in range(1, 5))
+        rows = [(a, tag, 28.0, None, 0), (a, tag, 28.0, None, 0),
+                (b, tag, 29.0, None, 0), (c, tag, 25.0, None, 0)]
+
+        async def stored():
+            async with db.acquire() as conn:
+                return [tuple(r) for r in await conn.fetch(
+                    "SELECT ts, value, quality, ctid::text FROM tag_value ORDER BY ts, ctid")]
+
+        await db.write_window([tag], start, end, rows)
+        original = await stored()
+        for _ in range(3):
+            await db.write_window([tag], start, end, rows)
+        assert await stored() == original
+        corrected = [*rows[:2], (b, tag, None, None, 1), (d, tag, 28.5, None, 0)]
+        await db.write_window([tag], start, end, corrected)
+        received = await stored()
+        assert received[:2] == original[:2]
+        assert [r[:3] for r in received[2:]] == [(b, None, 1), (d, 28.5, 0)]
+        assert (await counts(db))["Weight"] == (4, 4)
+    finally:
+        await db.close()
+
+
+def test_historian_sources_copy_simultaneously_and_keep_tag_ids_separate(test_settings):
+    import asyncio
+
+    seen = set()
+
+    class HistorianSource:
+        def __init__(self, config):
+            self.name = config["server"]
+
+        async def open(self):
+            if self.name == "unreachable":
+                raise HistorianError("Историк недоступен")
+
+        async def close(self):
+            pass
+
+        async def list_tags(self):
+            return [Tag("Box_Weight", unit="кг")]
+
+        async def read(self, tags, start, end):
+            seen.add(self.name)
+            # Первый историк не закончит чтение, пока второй не начнёт своё.
+            while seen != {"plant-a", "plant-b"}:
+                await asyncio.sleep(0.01)
+            return [Point("Box_Weight", end, 28 if self.name == "plant-a" else 29, None, 0)]
+
+    with TestClient(create_app(test_settings, historian_factory=HistorianSource)) as client:
+        assert client.get('/api/sources').json()['items'][0]['id'] == 'main'
+        for source in ('line2', 'offline'):
+            assert client.post('/api/sources', json={'id': source}).status_code == 201
+        assert client.post('/api/sources', json={'id': 'line2'}).status_code == 409
+        for source, address in [('main', 'plant-a'), ('line2', 'plant-b'), ('offline', 'unreachable')]:
+            assert client.post(f'/api/copy/start?source={source}', json={
+                'server': address, 'include': 'Box_*', 'history_hours': 1, 'password': 'test',
+            }).status_code == 200
+        for _ in range(120):
+            status = client.get('/api/status?source=line2').json()
+            states = {s['id']: s['state'] for s in status['sources']}
+            if status['db']['rows'] == 2 and states == {'main': 'live', 'line2': 'live', 'offline': 'error'}:
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail(str(status))
+        tags = {t['name']: t for t in client.get('/api/tags').json()['items']}
+        assert {name: t['value'] for name, t in tags.items()} == {'Box_Weight': 28, 'line2::Box_Weight': 29}
+        assert tags['Box_Weight']['tag_id'] != tags['line2::Box_Weight']['tag_id']
+        assert client.get('/api/tags?source=line2').json()['total'] == 1
+        assert client.get('/api/settings?source=line2').json()['password_set'] is True
+        assert 'password' not in client.get('/api/settings?source=line2').json()
+        found = client.get('/graphite/metrics/find', params={'query': 'Источники.line2.*'}).json()
+        assert found[0]['id'] == 'Источники.line2.Box_Weight'
+        end = datetime.now(timezone.utc)
+        result = client.post('/api/scripts/run', json={
+            'from': (end - timedelta(hours=1)).isoformat(), 'to': end.isoformat(),
+            'code': 'stat(last(tag("line2::Box_Weight")) - last(tag("Box_Weight")))',
+        }).json()
+        assert result['metrics'][0]['value'] == 1
+        assert client.post('/api/copy/stop?source=line2').status_code == 200
+        assert client.post('/api/copy/reset?source=line2').status_code == 200
+        source_details = client.get('/api/status').json()['db']['source_details']
+        assert {source: values['rows'] for source, values in source_details.items()} == {'main': 1, 'line2': 0}
+
+    with TestClient(create_app(test_settings, historian_factory=HistorianSource)) as client:
+        assert client.get('/api/status?source=main').json()['copy']['running'] is True
+        assert client.get('/api/status?source=line2').json()['copy']['running'] is False
 
 
 async def test_backfill_then_new_values_without_duplicates(tmp_path, test_settings):

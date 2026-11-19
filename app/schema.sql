@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS tag (
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
 
+ALTER TABLE tag ADD COLUMN IF NOT EXISTS source_id text NOT NULL DEFAULT 'main';
+
 -- До какого момента скопирован каждый тег
 CREATE TABLE IF NOT EXISTS tag_sync (
     tag_id       integer PRIMARY KEY REFERENCES tag (tag_id) ON DELETE CASCADE,

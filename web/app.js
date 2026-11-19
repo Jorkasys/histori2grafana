@@ -76,7 +76,9 @@ async function pill() {
   const node = document.getElementById('status-pill');
   try {
     const status = await get('/status');
-    const [text, kind] = STATES[status.copy.state] || [status.copy.state, ''];
+    const states = status.sources.map((s) => s.state);
+    const state = ['error', 'backfill', 'starting', 'live'].find((s) => states.includes(s));
+    const [text, kind] = STATES[state || 'stopped'];
     node.textContent = text;
     node.className = `status ${kind}`;
   } catch {

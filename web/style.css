@@ -3,6 +3,7 @@
    поэтому без интернета ничего докачивать не нужно. */
 
 :root {
+  color-scheme: light;
   --paper: #ffffff;
   --ground: #eef1ef;          /* шапка и боковые колонки */
   --ink: #1e2a36;             /* основной текст */
@@ -22,6 +23,12 @@
   --ok: #2e7d32;
   --warn: #a15c00;
   --bad: #b3261e;
+  --panel: #fafbfa;
+  --note: #f6f8f7;
+  --note-bad: #fcf1f0;
+  --note-ok: #f0f7f0;
+  --note-warn: #fcf5ea;
+  --pen-on: #fff;
   --font: Bahnschrift, "DIN Alternate", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   --code: "Cascadia Mono", Consolas, "Courier New", monospace;
   --r: 3px;
@@ -31,6 +38,35 @@
     linear-gradient(90deg, var(--grid) 1px, transparent 1px),
     linear-gradient(var(--grid-minor) 1px, transparent 1px),
     linear-gradient(90deg, var(--grid-minor) 1px, transparent 1px);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #141d23;
+  --ground: #202c34;
+  --ink: #e1ebf0;
+  --ink-2: #c3d0da;
+  --ink-3: #a4b4c1;
+  --hold: #a2b3bf;
+  --rule: #394954;
+  --rule-strong: #546572;
+  --rule-soft: #2d3c46;
+  --control: #7b8d9a;
+  --grid: #344953;
+  --grid-minor: #22333c;
+  --pen: #8ac6fa;
+  --pen-dark: #abd8ff;
+  --pen-soft: #253e51;
+  --pen-ring: rgba(138, 198, 250, .28);
+  --pen-on: #10202c;
+  --ok: #86d6a5;
+  --warn: #f2c27e;
+  --bad: #ffaaab;
+  --panel: #1a252d;
+  --note: #1c2932;
+  --note-bad: #38262b;
+  --note-ok: #1e302c;
+  --note-warn: #362e24;
 }
 
 * { box-sizing: border-box; }
@@ -234,10 +270,10 @@ button, .btn {
 }
 button:hover, .btn:hover { background: var(--ground); color: var(--ink); }
 button:disabled { opacity: .5; cursor: default; }
-button.primary { background: var(--pen); border-color: var(--pen); color: #fff; }
+button.primary { background: var(--pen); border-color: var(--pen); color: var(--pen-on); }
 button.primary:hover { background: var(--pen-dark); border-color: var(--pen-dark); }
 button.danger { color: var(--bad); border-color: rgba(179, 38, 30, .55); }
-button.danger:hover { background: #fbeeed; }
+button.danger:hover { background: var(--note-bad); }
 button.small, .btn.small { min-height: 28px; padding: 2px 10px; font-size: 13px; }
 button.link {
   border: 0;
@@ -269,11 +305,11 @@ button.seg.on { background: var(--pen-soft); border-color: var(--pen); color: va
   padding: 9px 14px;
   margin: 0 0 18px;
   font-size: 14px;
-  background: #f6f8f7;
+  background: var(--note);
 }
-.note.bad { border-color: rgba(179, 38, 30, .35); background: #fcf1f0; }
-.note.ok { border-color: rgba(46, 125, 50, .35); background: #f0f7f0; }
-.note.warn { border-color: rgba(161, 92, 0, .35); background: #fcf5ea; }
+.note.bad { border-color: var(--bad); background: var(--note-bad); }
+.note.ok { border-color: var(--ok); background: var(--note-ok); }
+.note.warn { border-color: var(--warn); background: var(--note-warn); }
 .note .small { margin-left: 4px; }
 
 /* --- «Подключение»: протокол проверки на миллиметровке --------------------- */
@@ -417,7 +453,7 @@ th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--rul
 th { color: var(--ink-2); font-weight: 600; font-size: 13px; background: var(--ground); position: sticky; top: 0; }
 th.num, td.num { text-align: right; white-space: nowrap; }
 tbody tr.link { cursor: pointer; }
-tbody tr.link:hover { background: #f4f8f6; }
+tbody tr.link:hover { background: var(--note); }
 .tag-link { color: var(--ink); text-decoration: none; }
 .tag-link:hover, tr.link:hover .tag-link { color: var(--pen); text-decoration: underline; }
 td .desc { display: block; color: var(--ink-3); font-size: 12.5px; }
@@ -499,7 +535,7 @@ td .desc { display: block; color: var(--ink-3); font-size: 12.5px; }
 .lg { display: inline-flex; align-items: baseline; gap: 6px; }
 .lg.off { opacity: .55; }
 .lg-mark { width: 14px; height: 0; border-top: 2px solid var(--c); align-self: center; }
-.lg-mark.dot { width: 8px; height: 8px; border: 1.5px solid var(--c); border-radius: 50%; background: #fff; }
+.lg-mark.dot { width: 8px; height: 8px; border: 1.5px solid var(--c); border-radius: 50%; background: var(--paper); }
 button.lg-name {
   border: 0;
   background: none;
@@ -535,7 +571,7 @@ button.lg-remove:hover { background: var(--ground); color: var(--bad); }
   padding: 8px 12px 10px;
   border-top: 1px solid var(--rule-soft);
   font-size: 13px;
-  background: #fafbfa;
+  background: var(--panel);
 }
 .scale-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .scale-name { color: var(--c); font-weight: 600; }
@@ -567,7 +603,7 @@ button.swatch.on { box-shadow: 0 0 0 2px var(--ink); }
 .add-panel { width: 100%; justify-content: center; border-style: dashed; color: var(--ink-2); }
 
 /* «Добавить тег»: поиск прямо в графике, раскрывается под заголовком */
-.adder { padding: 8px 12px 10px; border-top: 1px solid var(--rule-soft); border-bottom: 1px solid var(--rule-soft); background: #fafbfa; }
+.adder { padding: 8px 12px 10px; border-top: 1px solid var(--rule-soft); border-bottom: 1px solid var(--rule-soft); background: var(--panel); }
 .adder-list { max-height: 260px; overflow: auto; margin-top: 6px; border-top: 1px solid var(--rule); scrollbar-width: thin; }
 .adder .hint { margin: 8px 0 0; }
 .adder .pick:focus-visible { outline-offset: -2px; }
@@ -606,7 +642,7 @@ button.swatch.on { box-shadow: 0 0 0 2px var(--ink); }
   grid-template-columns: auto minmax(0, 1fr);
   border: 1px solid var(--control);
   border-radius: var(--r);
-  background: #fbfcfb;
+  background: var(--panel);
   overflow: hidden;
 }
 .editor:focus-within { border-color: var(--pen); box-shadow: 0 0 0 3px var(--pen-ring); }
@@ -661,7 +697,7 @@ button.swatch.on { box-shadow: 0 0 0 2px var(--ink); }
 .output {
   margin: 0;
   padding: 10px 12px;
-  background: #fafbfa;
+  background: var(--panel);
   border: 1px solid var(--rule-soft);
   font: 13.5px/1.55 var(--code);
   white-space: pre-wrap;
@@ -746,7 +782,18 @@ button.toast-close:hover { background: var(--ground); color: var(--ink); }
 }
 /* Числовые показатели за выбранный период */
 .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 14px 0; }
-.metric-card { border: 1px solid #d6e0dc; border-radius: 6px; padding: 16px; background: #fff; }
-.metric-label { display: flex; justify-content: space-between; gap: 12px; color: #5f6b77; overflow-wrap: anywhere; }
+.metric-card { border: 1px solid var(--rule); border-radius: 6px; padding: 16px; background: var(--paper); }
+.metric-label { display: flex; justify-content: space-between; gap: 12px; color: var(--ink-3); overflow-wrap: anywhere; }
 .metric-value { margin-top: 8px; font-size: 2rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.metric-unit { font-size: 1rem; color: #5f6b77; }
+.metric-unit { font-size: 1rem; color: var(--ink-3); }
+.theme-toggle { align-self: center; }
+.theme-toggle[aria-pressed="true"] { background: var(--pen-soft); color: var(--pen); }
+.source-picker { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.source-picker select { max-width: min(320px, 85vw); }
+.source-add summary { color: var(--pen); }
+.source-add .toolbar { margin-top: 10px; }
+.source-states { display: flex; flex-wrap: wrap; padding: 0; gap: 6px 14px; list-style: none; }
+.source-states li { padding: 3px 8px; border: 1px solid var(--rule); border-radius: var(--r); }
+.source-states .ok { color: var(--ok); }
+.source-states .warn { color: var(--warn); }
+.source-states .bad { color: var(--bad); }

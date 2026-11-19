@@ -25,6 +25,52 @@ def outputs(result: dict) -> dict[str, Series]:
     return dict(result["outputs"])
 
 
+def test_calendar_weeks_use_monday_and_local_midnight():
+    def ts(text):
+        return datetime.fromisoformat(text).timestamp()
+
+    start = ts('2026-11-01T21:00:00+03:00')
+    monday = ts('2026-11-02T00:00:00+03:00')
+    next_week = ts('2026-11-09T00:00:00+03:00')
+    end = ts('2026-11-10T00:00:00+03:00')
+    data = Series([start, monday, monday + 900, next_week, end], [1, 2, None, 3, 100], end,
+                  events=True, unit='кг')
+    result = Program('show(aggregate(samples("W"), "week", "sum", tz="Europe/Moscow"), "w")'
+                     ).execute({'W': data}, (start, end))
+    series = outputs(result)['w']
+    assert series.t == [start, monday, next_week]
+    assert series.v == [1, 2, 3] and series.unit == 'кг'
+
+
+def test_calendar_mean_uses_actual_duration_across_dst():
+    def ts(text):
+        return datetime.fromisoformat(text).timestamp()
+
+    start = ts('2026-03-29T00:00:00+01:00')
+    change = ts('2026-03-29T03:00:00+02:00')
+    end = ts('2026-03-30T00:00:00+02:00')
+    data = Series([start, change], [0, 1], end)
+    result = Program('t = tag("T")\n'
+                     'show(aggregate(t, "day", "time_mean", tz="Europe/Berlin"), "m")\n'
+                     'stat(integral(t), "i")\nstat(first(t), "f")').execute({'T': data}, (start, end))
+    assert outputs(result)['m'].v == pytest.approx([21 / 23])
+    assert [m['value'] for m in result['metrics']] == [21, 0]
+
+
+def test_calendar_months_leave_empty_buckets_and_keep_partial_months():
+    def ts(text):
+        return datetime.fromisoformat(text).timestamp()
+
+    start = ts('2026-01-31T10:00:00+00:00')
+    february = ts('2026-02-01T00:00:00+00:00')
+    march = ts('2026-03-01T00:00:00+00:00')
+    end = ts('2026-03-02T15:00:00+00:00')
+    samples = Series([start, march, march + 120], [1, 7, 9], end, events=True)
+    script = 'show(aggregate(samples("T"), "month", "last"), "m")'
+    series = outputs(Program(script).execute({'T': samples}, (start, end)))['m']
+    assert series.t == [start, february, march] and series.v == [1, None, 9]
+
+
 def wave(n: int = 361, step: float = 10.0) -> Series:
     """Час значений раз в 10 с: синус с периодом 10 мин и тремя выбросами."""
     t = [T0 + i * step for i in range(n)]

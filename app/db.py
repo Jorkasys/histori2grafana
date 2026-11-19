@@ -93,6 +93,10 @@ class Database:
             await conn.execute(SCHEMA.read_text(encoding="utf-8"))
             if self.timescale:
                 await self._timescale(conn)
+            else:
+                await conn.execute(
+                    "ALTER TABLE tag_value SET (autovacuum_vacuum_scale_factor = 0.02, "
+                    "autovacuum_vacuum_threshold = 1000)")
         await self.ensure_reader()
 
     async def _timescale(self, conn) -> None:
@@ -151,10 +155,17 @@ class Database:
                 "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
                 key, json.dumps(value, ensure_ascii=False))
 
+    async def source_settings(self) -> dict[str, dict[str, Any]]:
+        async with self.acquire() as conn:
+            rows = await conn.fetch("SELECT key, value FROM app_setting "
+                                    "WHERE key = 'historian' OR key LIKE 'historian:%' ORDER BY key")
+        return {r["key"].partition(":")[2] or "main": json.loads(r["value"]) for r in rows}
+
     # ------------------------------------------------------------ копирование
-    async def upsert_tags(self, tags: Sequence[Tag]) -> dict[str, int]:
+    async def upsert_tags(self, tags: Sequence[Tag], source: str = "main") -> dict[str, int]:
         """Завести теги в справочнике; теги, которых больше нет под масками,
         пометить неактивными (их данные остаются). Вернуть {имя: tag_id}."""
+        names = [t.name if source == "main" else f"{source}::{t.name}" for t in tags]
         async with self.acquire() as conn:
             async with conn.transaction():
                 rows = []
@@ -162,8 +173,8 @@ class Database:
                     rows = await conn.fetch(
                         """
                         INSERT INTO tag (name, description, unit, datatype, min_value,
-                                         max_value, active)
-                        SELECT x.name, x.descr, x.unit, x.dtype, x.minv, x.maxv, true
+                                         max_value, active, source_id)
+                        SELECT x.name, x.descr, x.unit, x.dtype, x.minv, x.maxv, true, $7
                         FROM unnest($1::text[], $2::text[], $3::text[], $4::text[],
                                     $5::float8[], $6::float8[])
                              AS x(name, descr, unit, dtype, minv, maxv)
@@ -175,15 +186,20 @@ class Database:
                                 max_value   = EXCLUDED.max_value,
                                 active      = true,
                                 updated_at  = now()
+                        WHERE tag.source_id = EXCLUDED.source_id
                         RETURNING tag_id, name
                         """,
-                        [t.name for t in tags], [t.description for t in tags],
+                        names, [t.description for t in tags],
                         [t.unit for t in tags], [t.datatype for t in tags],
-                        [t.min_value for t in tags], [t.max_value for t in tags])
+                        [t.min_value for t in tags], [t.max_value for t in tags], source)
+                    if len(rows) != len(tags):
+                        raise ValueError("Имя тега совпадает с именем тега другого источника")
                 await conn.execute(
                     "UPDATE tag SET active = false, updated_at = now() "
-                    "WHERE active AND NOT (name = ANY($1::text[]))", [t.name for t in tags])
-        return {r["name"]: r["tag_id"] for r in rows}
+                    "WHERE active AND source_id = $2 AND NOT (name = ANY($1::text[]))",
+                    names, source)
+        ids = {r["name"]: r["tag_id"] for r in rows}
+        return {tag.name: ids[name] for tag, name in zip(tags, names)}
 
     async def load_watermarks(self, tag_ids: Sequence[int]) -> dict[int, datetime]:
         async with self.acquire() as conn:
@@ -202,51 +218,128 @@ class Database:
         ids = list(tag_ids)
         async with self.acquire() as conn:
             async with conn.transaction():
-                deleted = await conn.fetch(
-                    "DELETE FROM tag_value WHERE tag_id = ANY($1::int[]) "
-                    "AND ts > $2 AND ts <= $3 RETURNING tag_id", ids, start, end)
-                if records:
-                    await conn.copy_records_to_table("tag_value", records=records,
-                                                     columns=VALUE_COLUMNS)
-                delta = Counter(r[1] for r in records)
-                delta.subtract(r["tag_id"] for r in deleted)
+                await self._lock_tags(conn, ids)
+                if self.timescale:
+                    deleted = await conn.fetch(
+                        "DELETE FROM tag_value WHERE tag_id = ANY($1::int[]) "
+                        "AND ts > $2 AND ts <= $3 RETURNING tag_id", ids, start, end)
+                    if records:
+                        await conn.copy_records_to_table("tag_value", records=records,
+                                                         columns=VALUE_COLUMNS)
+                    delta = Counter(r[1] for r in records)
+                    delta.subtract(r["tag_id"] for r in deleted)
+                else:
+                    delta = await self._write_postgres(conn, ids, start, end, records)
                 await conn.execute(
                     """
                     INSERT INTO tag_sync (tag_id, synced_until, row_count)
                     SELECT unnest($1::int[]), $2, unnest($3::bigint[])
                     ON CONFLICT (tag_id) DO UPDATE
-                        SET synced_until = EXCLUDED.synced_until,
+                        SET synced_until = greatest(tag_sync.synced_until, EXCLUDED.synced_until),
                             row_count    = greatest(tag_sync.row_count + EXCLUDED.row_count, 0),
                             updated_at   = now()
                     """,
                     ids, end, [delta.get(i, 0) for i in ids])
 
-    async def reset_data(self) -> None:
+    @staticmethod
+    async def _lock_tags(conn, ids: Sequence[int]) -> None:
+        # История и счётчики одного тега обновляются в одном порядке.
+        await conn.fetch("SELECT tag_id FROM tag WHERE tag_id = ANY($1::int[]) "
+                         "ORDER BY tag_id FOR NO KEY UPDATE", ids)
+
+    async def _write_postgres(self, conn, ids, start, end, records) -> dict[int, int]:
+        if not records:
+            removed = await conn.fetch("""
+                WITH removed AS (
+                    DELETE FROM tag_value WHERE tag_id = ANY($1::int[]) AND ts > $2 AND ts <= $3
+                    RETURNING tag_id
+                ) SELECT tag_id, -count(*) AS delta FROM removed GROUP BY tag_id
+                """, ids, start, end)
+            return {r["tag_id"]: r["delta"] for r in removed}
+
+        # Когда окно полностью новое, оставляем прямой COPY без промежуточной таблицы.
+        existing = await conn.fetchval("SELECT EXISTS (SELECT 1 FROM tag_value "
+                                       "WHERE tag_id = ANY($1::int[]) AND ts > $2 AND ts <= $3)",
+                                       ids, start, end)
+        if not existing:
+            await conn.copy_records_to_table("tag_value", records=records, columns=VALUE_COLUMNS)
+            return Counter(r[1] for r in records)
+
+        # Таблица живёт в одном соединении пула и очищается при фиксации окна.
+        if not await conn.fetchval("SELECT to_regclass('pg_temp.h2g_incoming') IS NOT NULL"):
+            await conn.execute("CREATE TEMP TABLE h2g_incoming (LIKE tag_value) ON COMMIT DELETE ROWS")
+        await conn.copy_records_to_table("h2g_incoming", records=records, columns=VALUE_COLUMNS)
+        changed = await conn.fetch("""
+            WITH stored AS MATERIALIZED (
+                SELECT ts, tag_id, value, value_text, quality FROM tag_value
+                WHERE tag_id = ANY($1::int[]) AND ts > $2 AND ts <= $3
+            ), extra AS (
+                SELECT * FROM stored EXCEPT ALL SELECT * FROM pg_temp.h2g_incoming
+            ), missing AS (
+                SELECT * FROM pg_temp.h2g_incoming EXCEPT ALL SELECT * FROM stored
+            ), removed AS (
+                DELETE FROM tag_value v USING (
+                    SELECT DISTINCT tag_id, ts FROM extra
+                ) x WHERE v.tag_id = x.tag_id AND v.ts = x.ts
+                    AND v.tag_id = ANY($1::int[]) AND v.ts > $2 AND v.ts <= $3
+                RETURNING v.tag_id
+            ), inserted AS (
+                INSERT INTO tag_value (ts, tag_id, value, value_text, quality)
+                SELECT i.ts, i.tag_id, i.value, i.value_text, i.quality
+                FROM pg_temp.h2g_incoming i JOIN (SELECT DISTINCT tag_id, ts FROM extra) x
+                    USING (tag_id, ts)
+                UNION ALL
+                SELECT m.* FROM missing m
+                WHERE NOT EXISTS (SELECT 1 FROM extra x WHERE x.tag_id = m.tag_id AND x.ts = m.ts)
+                RETURNING tag_id
+            ) SELECT tag_id, sum(n) AS delta FROM (
+                SELECT tag_id, count(*) AS n FROM inserted GROUP BY tag_id
+                UNION ALL SELECT tag_id, -count(*) FROM removed GROUP BY tag_id
+            ) counts GROUP BY tag_id
+            """, ids, start, end)
+        return {r["tag_id"]: int(r["delta"]) for r in changed}
+
+    async def reset_data(self, source: str = "main") -> None:
         """Удалить все скопированные значения и отметки: копирование начнётся
         заново, с загрузки истории."""
         async with self.acquire() as conn:
             async with conn.transaction():
-                await conn.execute("TRUNCATE tag_value")
-                await conn.execute("DELETE FROM tag_sync")
+                await conn.execute("DELETE FROM tag_value v USING tag t "
+                                   "WHERE v.tag_id = t.tag_id AND t.source_id = $1", source)
+                await conn.execute("DELETE FROM tag_sync s USING tag t "
+                                   "WHERE s.tag_id = t.tag_id AND t.source_id = $1", source)
 
     # ------------------------------------------------------------------ чтение
     async def stats(self) -> dict[str, Any]:
         async with self.acquire() as conn:
-            tags = await conn.fetchrow(
-                "SELECT count(*) FILTER (WHERE active) AS active, count(*) AS total FROM tag")
-            sync = await conn.fetchrow(
-                "SELECT min(s.synced_until) AS oldest, max(s.synced_until) AS newest, "
-                "coalesce(sum(s.row_count), 0) AS rows "
-                "FROM tag_sync s JOIN tag t USING (tag_id) WHERE t.active")
-            rows_total = await conn.fetchval("SELECT coalesce(sum(row_count), 0) FROM tag_sync")
+            sources = await conn.fetch("""
+                SELECT t.source_id, count(*) FILTER (WHERE t.active) AS active, count(*) AS total,
+                       coalesce(sum(s.row_count), 0) AS rows,
+                       min(s.synced_until) FILTER (WHERE t.active) AS oldest,
+                       max(s.synced_until) FILTER (WHERE t.active) AS newest
+                FROM tag t LEFT JOIN tag_sync s USING (tag_id) GROUP BY t.source_id
+                """)
             size = await conn.fetchval("SELECT pg_database_size(current_database())")
-        return {"tags_active": tags["active"], "tags_total": tags["total"],
-                "rows": int(rows_total), "db_bytes": int(size),
-                "synced_oldest": _iso(sync["oldest"]), "synced_newest": _iso(sync["newest"]),
-                "timescale": self.timescale}
+            history = None if self.timescale else await conn.fetchrow("""
+                SELECT pg_table_size('tag_value') AS table_bytes,
+                       pg_indexes_size('tag_value') AS index_bytes, n_dead_tup AS dead_rows
+                FROM pg_stat_user_tables WHERE relid = 'tag_value'::regclass
+                """)
+        details = {r["source_id"]: {"tags_active": r["active"], "tags_total": r["total"],
+                                   "rows": int(r["rows"]), "synced_newest": _iso(r["newest"])}
+                   for r in sources}
+        oldest = min((r["oldest"] for r in sources if r["oldest"] is not None), default=None)
+        newest = max((r["newest"] for r in sources if r["newest"] is not None), default=None)
+        return {"tags_active": sum(r["active"] for r in sources),
+                "tags_total": sum(r["total"] for r in sources),
+                "rows": sum(r["rows"] for r in details.values()),
+                "source_details": details, "db_bytes": int(size),
+                "synced_oldest": _iso(oldest), "synced_newest": _iso(newest),
+                "timescale": self.timescale, "history": dict(history) if history else None}
 
     async def list_tags(self, query: str = "", limit: int = 200, offset: int = 0,
-                        include_inactive: bool = False, ids: Sequence[int] | None = None
+                        include_inactive: bool = False, ids: Sequence[int] | None = None,
+                        source: str | None = None
                         ) -> tuple[int, list[dict[str, Any]]]:
         text = query.lower()
         pattern = "%" + text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
@@ -254,14 +347,17 @@ class Database:
         where = [f"($1 = '' OR {name} LIKE $2 OR {descr} LIKE $2)", "(t.active OR $3)"]
         args: list[Any] = [query, pattern, include_inactive]
         if ids is not None:
-            where.append("t.tag_id = ANY($4::int[])")
             args.append(list(ids))
+            where.append(f"t.tag_id = ANY(${len(args)}::int[])")
+        if source is not None:
+            args.append(source)
+            where.append(f"t.source_id = ${len(args)}")
         cond = " AND ".join(where)
         async with self.acquire() as conn:
             total = await conn.fetchval(f"SELECT count(*) FROM tag t WHERE {cond}", *args)
             rows = await conn.fetch(
                 f"""
-                SELECT t.tag_id, t.name, t.description, t.unit, t.datatype, t.active,
+                SELECT t.tag_id, t.name, t.description, t.unit, t.datatype, t.active, t.source_id,
                        s.synced_until, s.row_count, v.ts, v.value, v.value_text, v.quality
                 FROM tag t
                 LEFT JOIN tag_sync s ON s.tag_id = t.tag_id
@@ -274,6 +370,7 @@ class Database:
                 """, *args)
         return int(total), [{
             "tag_id": r["tag_id"], "name": r["name"], "description": r["description"],
+            "source": r["source_id"],
             "unit": r["unit"], "datatype": r["datatype"], "active": r["active"],
             "synced_until": _iso(r["synced_until"]), "rows": r["row_count"] or 0,
             "ts": _iso(r["ts"]), "value": r["value"], "text": r["value_text"],
@@ -284,7 +381,7 @@ class Database:
         или которые копируются. Без последних значений, поэтому быстро."""
         async with self.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT t.tag_id, t.name, t.unit, t.datatype FROM tag t "
+                "SELECT t.tag_id, t.name, t.unit, t.datatype, t.source_id FROM tag t "
                 "WHERE t.datatype <> 'string' AND (t.active OR EXISTS "
                 "(SELECT 1 FROM tag_sync s WHERE s.tag_id = t.tag_id)) ORDER BY t.name")
         return [dict(r) for r in rows]

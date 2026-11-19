@@ -2,8 +2,9 @@
 
 import {
   ago, bytes, clear, confirmDialog, count, dateTime, debounce, el, fail, get, plural, post,
-  shared, tagValue, toast, TYPES,
+  tagValue, toast, TYPES,
 } from './core.js';
+import { sourceOf, sourcePicker, sourceQuery } from './sources.js';
 
 const STATE = {
   stopped: ['Копирование остановлено', ''],
@@ -46,6 +47,9 @@ function journalLines(events) {
 }
 
 export async function loadingPage(view) {
+  const { items } = await get('/sources');
+  const source = sourceOf(items).id;
+  const query = sourceQuery(source);
   const f = {
     tags: figure('Тегов копируется'), behind: figure('Отставание от историка'),
     last: figure('Последний опрос'), rows: figure('Строк в базе'), size: figure('Размер базы'),
@@ -83,14 +87,17 @@ export async function loadingPage(view) {
   let tagTimer = null;
   let tapeTimer = null;
   const calm = matchMedia('(prefers-reduced-motion: reduce)');
+  const sourceStates = el('ul', { class: 'source-states', 'aria-label': 'Состояние источников' });
 
   view.append(
     el('h1', {}, 'Копирование из историка'),
+    el('div', { class: 'toolbar' }, sourcePicker(items, source, 'loading')),
+    sourceStates,
     el('div', { class: 'copy-head' },
       el('div', { class: 'copy-status', 'aria-live': 'polite' }, stateText, stateSub),
       el('span', { class: 'spacer' }),
       btnToggle,
-      el('a', { class: 'btn', href: '#/connection' }, 'Настройки подключения')),
+      el('a', { class: 'btn', href: `#/connection?${query}` }, 'Настройки подключения')),
     progressBox,
     errorBox,
     tapeBox,
@@ -120,7 +127,7 @@ export async function loadingPage(view) {
       footer),
     el('details', { class: 'card maint' },
       el('summary', {}, 'Обслуживание'),
-      el('p', { class: 'hint' }, 'Удаляет все скопированные значения из базы приложения и ' +
+      el('p', { class: 'hint' }, 'Удаляет скопированные значения выбранного источника и ' +
         'загружает историю заново за период из настроек. В историке ничего не меняется. Это ' +
         'нужно, например, если вы увеличили глубину истории.'),
       el('button', { class: 'danger', type: 'button', onclick: () => reset() },
@@ -210,7 +217,7 @@ export async function loadingPage(view) {
   async function refresh() {
     let status;
     try {
-      status = await get('/status');
+      status = await get(`/status?${query}`);
     } catch (error) {
       if (shownError !== 'offline') {
         shownError = 'offline';
@@ -220,6 +227,13 @@ export async function loadingPage(view) {
     }
     last = status;
     const c = status.copy;
+    const states = status.sources.map((s) => {
+      const [label, kind] = STATE[s.state] || STATE.stopped;
+      const name = s.id === 'main' ? 'Основной' : s.id;
+      return el('li', { class: kind }, `${name} · ${label}`);
+    });
+    clear(sourceStates).append(...states);
+    sourceStates.hidden = states.length < 2;
     const db = status.db;
     if (c.now) offset = c.now - Date.now() / 1000;
     const now = Date.now() / 1000 + offset;
@@ -240,22 +254,25 @@ export async function loadingPage(view) {
     progressBox.hidden = c.state !== 'backfill';
     progress.style.width = `${pct}%`;
 
-    f.tags.value.textContent = count(c.running ? c.tags : db.tags_active);
-    f.tags.sub.textContent = `в справочнике всего: ${count(db.tags_total)}`;
+    const detail = db.source_details[source];
+    f.tags.value.textContent = count(c.running ? c.tags : 0);
+    f.tags.sub.textContent = `у источника всего ${count(detail?.tags_total || 0)}`;
     f.behind.value.textContent = !c.running || c.behind_s === null ? '—'
       : c.behind_s < 1 ? 'нет' : ago(c.behind_s);
-    f.behind.sub.textContent = db.synced_newest ? `скопировано до ${dateTime(db.synced_newest)}` : '';
+    f.behind.sub.textContent = detail?.synced_newest ? `скопировано до ${dateTime(detail.synced_newest)}` : '';
     f.last.value.textContent = c.last_sync_at ? `${ago(now - c.last_sync_at)} назад` : '—';
     f.last.sub.textContent = c.cycle_s !== null && c.cycle_s !== undefined
       ? `опрос длился ${seconds(c.cycle_s)}` : '';
     f.rows.value.textContent = count(db.rows);
-    // Перекрытие перечитывается при каждом опросе, поэтому прочитано больше, чем лежит
-    f.rows.sub.textContent = c.running && c.rows_copied
-      ? `с запуска прочитано ${count(c.rows_copied)}, перекрытие читается повторно` : '';
+    f.rows.sub.textContent = `у выбранного источника ${count(detail?.rows || 0)}`;
     f.size.value.textContent = bytes(db.db_bytes);
     f.size.sub.textContent = db.timescale ? 'TimescaleDB, старое сжимается' : 'PostgreSQL';
+    if (db.history) {
+      f.size.sub.textContent += ` · история ${bytes(db.history.table_bytes)} · индексы ` +
+        `${bytes(db.history.index_bytes)} · устаревших строк ≈ ${count(db.history.dead_rows)}`;
+    }
 
-    const problem = c.last_error ? `error:${c.last_error}` : !c.running && !db.rows ? 'idle' : '';
+    const problem = c.last_error ? `error:${c.last_error}` : !c.running && !detail?.rows ? 'idle' : '';
     if (problem !== shownError) {
       shownError = problem;
       clear(errorBox);
@@ -264,7 +281,7 @@ export async function loadingPage(view) {
       } else if (problem === 'idle') {
         errorBox.append(el('div', { class: 'note warn' }, 'Копирование не запущено. Настройте ' +
           'подключение и нажмите «Сохранить и начать копирование». ',
-        el('a', { href: '#/connection' }, 'Перейти к подключению')));
+        el('a', { href: `#/connection?${query}` }, 'Перейти к подключению')));
       }
     }
 
@@ -289,7 +306,7 @@ export async function loadingPage(view) {
   async function loadTags() {
     try {
       const params = new URLSearchParams({ q: search.value.trim(), limit: shown,
-        inactive: inactive.checked ? 'true' : 'false' });
+        inactive: inactive.checked ? 'true' : 'false', source });
       const data = await get(`/tags?${params}`);
       clear(tbody);
       for (const t of data.items) {
@@ -326,10 +343,10 @@ export async function loadingPage(view) {
     try {
       btnToggle.disabled = true;
       if (running) {
-        await post('/copy/stop');
+        await post(`/copy/stop?${query}`);
         toast('Копирование остановлено', 'ok');
       } else {
-        await post('/copy/start');
+        await post(`/copy/start?${query}`);
         toast('Копирование запущено', 'ok');
       }
     } catch (error) { fail(error); } finally { btnToggle.disabled = false; }
@@ -337,12 +354,11 @@ export async function loadingPage(view) {
   }
 
   async function reset() {
-    let hours = shared.settings ? shared.settings.history_hours : null;
+    let hours = null;
     try {
-      shared.settings = await get('/settings');
-      hours = shared.settings.history_hours;
+      hours = (await get(`/settings?${query}`)).history_hours;
     } catch { /* останутся прежние настройки */ }
-    const rows = last ? last.db.rows : 0;
+    const rows = last?.db.source_details[source]?.rows || 0;
     const next = !running
       ? 'Копирование сейчас остановлено: история загрузится, когда вы его запустите.'
       : hours > 0
@@ -354,8 +370,8 @@ export async function loadingPage(view) {
       'Удалить и загрузить заново');
     if (!ok) return;
     try {
-      await post('/copy/reset');
-      toast('Значения удалены, загрузка началась заново', 'ok');
+      await post(`/copy/reset?${query}`);
+      toast(running ? 'История источника загружается заново' : 'Значения источника удалены', 'ok');
     } catch (error) { fail(error); }
     refresh();
     loadTags();

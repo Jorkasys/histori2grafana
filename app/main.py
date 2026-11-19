@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -24,6 +26,7 @@ log = logging.getLogger("app")
 
 WEB = Path(__file__).resolve().parent.parent / "web"
 SETTING_KEY = "historian"
+MAX_SOURCES = 12
 EXPORT_LIMIT = 2_000_000       # строк в одном файле CSV
 
 
@@ -32,25 +35,44 @@ def create_app(settings: Settings | None = None, *, historian_factory=None,
     """historian_factory и check_options подменяют историк в тестах."""
     settings = settings or Settings.from_env()
     db = Database(settings)
-    copier = Copier(db, **({"historian_factory": historian_factory} if historian_factory else {}))
+    workers: dict[str, Copier] = {}
+    source_lock = asyncio.Lock()
 
-    async def saved_config() -> dict[str, Any]:
-        return normalize(await db.load_setting(SETTING_KEY) or {}, strict=False)
+    def worker(source: str) -> Copier:
+        if source not in workers:
+            workers[source] = Copier(db, source=source, **(
+                {"historian_factory": historian_factory} if historian_factory else {}))
+        return workers[source]
+
+    def config_key(source: str) -> str:
+        return SETTING_KEY if source == "main" else f"{SETTING_KEY}:{source}"
+
+    async def saved_config(source: str) -> dict[str, Any]:
+        raw = await db.load_setting(config_key(source))
+        if source != "main" and raw is None:
+            raise HTTPException(404, "источник Historian не найден")
+        return normalize(raw or {}, strict=False)
+
+    async def all_configs() -> dict[str, dict[str, Any]]:
+        raw = await db.source_settings()
+        return {s: normalize(c, strict=False) for s, c in {"main": {}, **raw}.items()}
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         await db.connect()
-        config = await saved_config()
-        if config["enabled"] and config["server"]:
-            await copier.start(config)
-        yield
-        await copier.stop(quiet=True)
-        await db.close()
+        try:
+            for source, config in (await all_configs()).items():
+                if config["enabled"] and config["server"]:
+                    await worker(source).start(config)
+            yield
+        finally:
+            await asyncio.gather(*(c.stop(quiet=True) for c in workers.values()))
+            await db.close()
 
     app = FastAPI(title="historian2grafana", version=__version__, lifespan=lifespan,
                   docs_url=None, redoc_url=None)
     app.state.db = db
-    app.state.copier = copier
+    app.state.copier = worker("main")
 
     def public(config: dict[str, Any]) -> dict[str, Any]:
         out = dict(config)
@@ -78,65 +100,99 @@ def create_app(settings: Settings | None = None, *, historian_factory=None,
                 "grafana_port": settings.grafana_port, "timescale": db.timescale}
 
     @app.get("/api/settings")
-    async def get_settings() -> dict[str, Any]:
-        return public(await saved_config())
+    async def get_settings(source: str = "main") -> dict[str, Any]:
+        return public(await saved_config(source))
+
+    @app.get("/api/sources")
+    async def list_sources() -> dict[str, Any]:
+        return {"items": [{"id": source, "server": config["server"],
+                           "state": worker(source).state} for source, config in
+                          (await all_configs()).items()]}
+
+    @app.post("/api/sources", status_code=201)
+    async def create_source(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        source = str(body.get("id") or "").strip().lower()
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", source):
+            raise HTTPException(400, "имя источника: 1–32 символа, латинские буквы, цифры, - и _; "
+                               "первый символ — буква")
+        async with source_lock:
+            configs = await all_configs()
+            if source in configs:
+                raise HTTPException(409, "такой источник уже есть")
+            if len(configs) >= MAX_SOURCES:
+                raise HTTPException(400, f"допускается не больше {MAX_SOURCES} источников")
+            await db.save_setting(config_key(source), {"enabled": False})
+        return {"id": source}
 
     @app.put("/api/settings")
-    async def put_settings(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
-        old = await saved_config()
-        config = merged(body, old)
-        config["enabled"] = old["enabled"]
-        await db.save_setting(SETTING_KEY, config)
-        if copier.running:
-            await copier.start(config)
-        return public(config)
+    async def put_settings(body: dict[str, Any] = Body(...), source: str = "main") -> dict[str, Any]:
+        async with source_lock:
+            old = await saved_config(source)
+            config = merged(body, old)
+            config["enabled"] = old["enabled"] and bool(config["server"])
+            await db.save_setting(config_key(source), config)
+            if config["enabled"]:
+                await worker(source).start(config)
+            elif worker(source).running:
+                await worker(source).stop()
+            return public(config)
 
     @app.post("/api/test")
-    async def test(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
-        config = merged(body, await saved_config())
+    async def test(body: dict[str, Any] = Body(default={}), source: str = "main") -> dict[str, Any]:
+        config = merged(body, await saved_config(source))
         steps = await check(config, **(check_options or {}))
         return {"ok": all(s.ok for s in steps), "steps": [s.as_dict() for s in steps]}
 
     @app.post("/api/copy/start")
-    async def copy_start(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
-        config = merged(body, await saved_config())
-        if not config["server"]:
-            raise HTTPException(400, "сначала укажите сервер историка")
-        config["enabled"] = True
-        await db.save_setting(SETTING_KEY, config)
-        await copier.start(config)
-        return copier.status()
+    async def copy_start(body: dict[str, Any] = Body(default={}), source: str = "main") -> dict[str, Any]:
+        async with source_lock:
+            config = merged(body, await saved_config(source))
+            if not config["server"]:
+                raise HTTPException(400, "сначала укажите сервер историка")
+            config["enabled"] = True
+            await db.save_setting(config_key(source), config)
+            await worker(source).start(config)
+            return worker(source).status()
 
     @app.post("/api/copy/stop")
-    async def copy_stop() -> dict[str, Any]:
-        config = await saved_config()
-        config["enabled"] = False
-        await db.save_setting(SETTING_KEY, config)
-        await copier.stop()
-        return copier.status()
+    async def copy_stop(source: str = "main") -> dict[str, Any]:
+        async with source_lock:
+            config = await saved_config(source)
+            config["enabled"] = False
+            await db.save_setting(config_key(source), config)
+            await worker(source).stop()
+            return worker(source).status()
 
     @app.post("/api/copy/reset")
-    async def copy_reset() -> dict[str, Any]:
+    async def copy_reset(source: str = "main") -> dict[str, Any]:
         """Удалить скопированные значения и загрузить историю заново."""
-        was_running = copier.running
-        await copier.stop(quiet=True)
-        await db.reset_data()
-        copier.event("info", "Скопированные значения удалены")
-        config = await saved_config()
-        if was_running and config["server"]:
-            await copier.start(config)
-        return copier.status()
+        async with source_lock:
+            config = await saved_config(source)
+            copier = worker(source)
+            was_running = copier.running
+            await copier.stop(quiet=True)
+            try:
+                await db.reset_data(source)
+                copier.event("info", "Скопированные значения удалены")
+            finally:
+                if was_running and config["server"]:
+                    await copier.start(config)
+            return copier.status()
 
     @app.get("/api/status")
-    async def status() -> dict[str, Any]:
-        return {"copy": copier.status(), "db": await db.stats()}
+    async def status(source: str = "main") -> dict[str, Any]:
+        configs = await all_configs()
+        if source not in configs:
+            raise HTTPException(404, "источник Historian не найден")
+        return {"copy": worker(source).status(), "db": await db.stats(),
+                "sources": [{"id": s, "state": worker(s).state} for s in configs]}
 
     @app.get("/api/tags")
     async def tags(q: str = "", limit: int = Query(200, ge=1, le=2000),
                    offset: int = Query(0, ge=0), inactive: bool = False,
-                   ids: str = "") -> dict[str, Any]:
+                   ids: str = "", source: str | None = None) -> dict[str, Any]:
         id_list = _ids(ids) if ids else None
-        total, items = await db.list_tags(q.strip(), limit, offset, inactive, id_list)
+        total, items = await db.list_tags(q.strip(), limit, offset, inactive, id_list, source)
         return {"total": total, "items": items}
 
     @app.get("/api/series")

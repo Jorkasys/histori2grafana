@@ -15,6 +15,10 @@ const iso = (seconds) => new Date(seconds * 1000).toISOString();
 const BLANK = '# Новый скрипт. Например:\n# t = tag("имя тега")\n# show(peaks(t, level=80), "пики")\n';
 
 const EXAMPLES = [
+  { name: 'Среднее по дням и неделям', code: (a) => `t = tag("${a}")
+show(aggregate(t, "day", "time_mean", tz="Europe/Moscow"), "По суткам")
+show(aggregate(t, "week", "time_mean", tz="Europe/Moscow"), "По неделям")
+` },
   { name: 'Накопленный перевес коробок', code: (a) => `# Выберите тег веса. Одна запись должна соответствовать одной коробке.
 # Если вес опрашивается многократно, берите его по сигналу завершения взвешивания.
 weight = samples("${a}")
