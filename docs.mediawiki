@@ -1,0 +1,167 @@
+== Short description ==
+historian2grafana gives site engineers a browser-based view of production measurements recorded in AVEVA Historian. It reads selected process tags from one or more archives, keeps a local history in PostgreSQL and presents trends and calculated indicators in the application and Grafana. For example, an engineer can select a shift, plot box weight against its target and display the cumulative weight deviation in kilograms. The application reads from the production archive. It sends no commands to production equipment.
+
+== Requirements ==
+=== Functional Requirements ===
+{| class="wikitable"
+! Function !! Requestor's response
+|-
+| Connect to data sources || Configure one or more AVEVA Historian SQL Server connections. For each source, test login, tag discovery and history reads. Select tags with include/exclude patterns. Each source has its own schedule and progress.
+|-
+| Collect production history || Load a configurable initial period (24 hours by default), then poll for new records (5 seconds by default). Store the tag, timestamp, value and quality. Resume from saved copy progress after an interruption and reread an overlapping interval to pick up late changes without duplicating matching records.
+|-
+| Inspect and export data || Compare multiple tags over a selected period, use separate scales for different engineering units and export the selected series to CSV.
+|-
+| Calculate indicators || Run saved scripts on the local data to identify peaks and threshold excursions, aggregate by day, week or month, and calculate running totals. For box weight, calculate measured weight minus target for each weighing. Positive deviations give overweight, the magnitude of negative deviations gives underweight, and their signed sum gives net deviation. Counting boxes requires a validated one-to-one relationship between archive events and weighings.
+|-
+| Publish results || Display a calculated series as a trend or a single result as a numeric card. Save the selected panels as a Grafana dashboard. Users can select tags and scripts in Grafana without writing SQL.
+|}
+
+=== Non-Functional Requirements ===
+{| class="wikitable"
+! Requirement name !! Requestor's response
+|-
+| Data classification || Scope includes equipment and process tag names, values, timestamps, quality, production trends, calculated deviations and exported reports. Data owner to assign the Mars classification for the approved tag set and derived reports. Connection credentials require separate protection.
+|-
+| Personal data || The weighing use case requires equipment and measurement data only. String tags, tag descriptions, configured Windows/SQL login names, Grafana accounts and host/access logs may contain personal identifiers. Confirm selected fields, whether accounts identify employees or contractors, and the number of individuals in each applicable category. Record zero only for a verified category.
+|-
+| Availability || An outage delays analytics and dashboards. Historian acquisition operates independently. Service window [hours/month], acceptable unplanned downtime [hours/month] and planned maintenance [hours/month] require site-owner approval. Monthly availability (%) = 100 × (1 − unplanned downtime / (service hours − planned downtime)), using hours within the agreed service window.
+|-
+| Disaster recovery – Restoration Time Objective (RTO) || [Hours to be agreed with the site owner.] Measure from disaster declaration until the application and Grafana are available on a replacement host, the collector is reading, and a reference panel has been verified. Record outstanding historical catch-up separately.
+|-
+| Disaster recovery – Restoration Point Objective (RPO) || [Maximum acceptable loss in hours to be agreed.] Cover local settings, scripts, dashboards, Grafana state and measurements. Older measurements can be reloaded only while retained and readable in the source archive. The local configuration and saved analyses depend on a recoverable backup.
+|-
+| Recovery point objective in case of unplanned downtime || For an interruption with the local database intact, the collector resumes from its saved progress. Recovery of the complete interval depends on the source retaining those records. Agree the maximum acceptable unrecoverable gap [minutes/hours] and verify by interrupting collection and comparing the recovered interval with Historian.
+|-
+| Total number of users || Intended users are site engineers analysing process data and personnel authorised to configure collection and dashboards. Confirm [named users], [peak concurrent viewers], [maintainers] and [peak usage hours] with the site.
+|-
+| Total number of transactions/requests per time period || At the default 5-second interval, one continuously running source schedules approximately 17,280 polling cycles per 24 hours. A cycle can issue several SQL queries and return many measurements. Record actual cycles/day, rows/day, dashboard requests/day and peak concurrent viewers during a representative shift.
+|-
+| Performance || For pilot acceptance, measure time from an archived timestamp to the first visible point on a live panel. A delay of 10–15 seconds was identified as tolerable when discussing the prospective second archive. Confirm the target for the current AVEVA deployment. Measure raw trends and calculated Stat panels separately. Also time opening a 24-hour trend and calculating a shift total, recording tag count, rows, concurrent viewers and 95th-percentile time. Site results and acceptance limits are pending.
+|}
+
+=== Support Requirements ===
+{| class="wikitable"
+! Requirement name !! Requestor's response
+|-
+| Planned maintenance || Proposed for site approval. At the agreed interval, check disk growth, backup completion and readability. In a scheduled window, back up the installation, stop collection and services, apply the tested update, restart and verify one source, one trend and one calculated panel. Collection and views may be interrupted during the update. Confirm maintenance owner, frequency and permitted downtime.
+|-
+| Condition based maintenance || If a source stops advancing, check its last successful cycle, network route, credentials and archive access. After recovery, verify catch-up for the affected interval. If disk space approaches the agreed minimum, check table and index sizes and arrange capacity or approved retention action. If the application responds but a panel is stale, compare the last source timestamp, local copy progress and Grafana refresh time. Site to assign alert thresholds, recipients and escalation contacts.
+|}
+
+== Application Components Diagram ==
+Diagram deferred.
+
+{| class="wikitable"
+! Term or acronym !! Definition or meaning
+|-
+| AVEVA Historian || The production archive from which the application reads process measurements.
+|-
+| Tag || A named measurement or signal, such as the weight reported by a checkweigher.
+|-
+| Collector || The application component that reads selected tags and maintains a local copy with per-tag progress.
+|-
+| PostgreSQL || Local database containing copied measurements, collection settings, progress and saved calculation scripts.
+|-
+| Grafana Stat || A dashboard panel displaying a single calculated value, such as total overweight in kilograms.
+|-
+| Graphite-compatible API || The application's query interface through which Grafana requests tag series and script results.
+|}
+
+== Dataflow Diagram ==
+Level 0 and Level 1 diagrams deferred. The same glossary applies.
+
+== System Design ==
+{| class="wikitable"
+! Category !! Solution
+|-
+| Hosting model || The reviewed configuration is the Windows offline package without Docker. The application, PostgreSQL and Grafana run on one Windows host. Confirm the production host, site/network segment, physical or virtual hosting and operational owner.
+|-
+| Non-prod environments || The repository provides automated tests and a Historian emulator. A dedicated site test environment, representative tag set and release acceptance process require confirmation.
+|-
+| Operating system || The offline package targets 64-bit Windows 10/11. Record the actual host edition, build and site support status.
+|-
+| Special Platforms || AVEVA Historian provides the source data. Grafana provides dashboards. The packaged components run locally and can operate without internet access.
+|-
+| Database software || Microsoft SQL Server exposes the AVEVA Historian Runtime database. PostgreSQL 16 stores the local analytical copy. The reviewed Windows package uses standard PostgreSQL without the TimescaleDB extension.
+|-
+| Encryption || The package serves the application and Grafana over HTTP. The Grafana PostgreSQL datasource uses a loopback connection with SSL disabled. SQL Server transport protection depends on the client driver and server configuration. The ODBC configuration allows trust of the server certificate for supported drivers. Explicit Historian passwords, when used, are stored in application settings without application-level encryption. Confirm site TLS, host and backup encryption, file permissions and credential handling.
+|-
+| Sizing || Allow approximately 2 GB for the Windows package, plus disk for production history, indexes, Grafana state, logs and backups. Use measured daily PostgreSQL growth × retention days, then add working space for maintenance. Record host CPU, RAM, usable disk, tag count, rows/day and measured growth during the pilot.
+|-
+| Application accessibility || Browser access to the application on TCP 8000 and Grafana on TCP 3000 by default. The application listens on all host interfaces. PostgreSQL listens on loopback, TCP 55432 by default. Confirm which workstations or groups may reach each web interface.
+|-
+| Authentication || The application's management UI and API have no built-in user sign-in. Grafana enables anonymous Viewer access and has a local administrator account in the standard package. Historian supports Windows integrated authentication or an explicit login. Confirm the approved production access mechanism for both web interfaces.
+|-
+| Authorization || Grafana Viewer can view dashboards. The separate Grafana database role can read the specified telemetry relations. The application API has no per-user role checks for changing sources, starting/stopping collection, editing scripts or saving/deleting dashboards. Grafana Viewer permissions do not govern these API operations. Confirm how management access will be restricted at the site.
+|-
+| Integrations || The collector initiates read-only queries to AVEVA Historian over SQL Server/TDS (normally TCP 1433 or the configured instance port). It writes to local PostgreSQL. Grafana queries the application through its Graphite-compatible HTTP API or reads telemetry directly from PostgreSQL. The application saves dashboard definitions as JSON files loaded by Grafana. FactoryTalk Historian SE via PI Data Archive is a prospective integration. TCP 5450 reachability was checked from the application host. Connector implementation, licensing and successful tag reads are outstanding.
+|-
+| Application logging || Per-source events and recent polling cycles are visible on the Copying page. Runtime messages go to the launcher console. PostgreSQL and Grafana write local logs, including data\postgres.log and data\grafana.log. Confirm log retention and any central collection.
+|-
+| Application monitoring || /healthz checks that the web process responds. Use the Copying page or /api/status to check source errors, last successful cycles and copy progress. Monitor disk usage and the age of the latest expected measurement separately. Central alert delivery and ownership require site confirmation.
+|-
+| Application performance management || Measure copy-cycle duration, rows copied, lag relative to a changing reference tag, and response times for representative trends and scripts. Record the panel refresh interval with each result to distinguish collection lag from display lag.
+|-
+| Application development framework || Python and FastAPI backend, asyncpg for PostgreSQL, HTML and JavaScript frontend, uPlot trend charts and Grafana dashboards.
+|-
+| Data retention || The standard Windows installation has no configured age-based purge of local history. Initial backfill duration sets the starting point for collection. Site to define retention for local measurements, exports, logs and backups, who performs deletion, and the source archive horizon available for backfill.
+|}
+
+== Infrastructure Diagram ==
+Diagram deferred.
+
+=== Service accounts ===
+{| class="wikitable"
+! Account name !! Target resource !! Permissions / roles
+|-
+| [Site Historian reader] || AVEVA Historian / SQL Server Runtime || Read selected tag metadata and history, including dbo.Tag and dbo.History. Use the approved SQL login or Windows identity. With integrated authentication, the Windows identity running the collector is used. Confirm the assigned identity and grants.
+|-
+| historian (package default) || Local PostgreSQL cluster and historian database || The Windows launcher uses this role to initialise the cluster. It is the bootstrap superuser and is also used by the application for schema creation, reader provisioning and routine reads/writes. Production role separation or acceptance of these privileges requires review.
+|-
+| grafana_reader (package default) || Local PostgreSQL, public schema || CONNECT to the database, USAGE on the schema and SELECT on tag, tag_value, tag_sync and tag_latest. Used by Grafana's PostgreSQL datasource.
+|-
+| [Windows run identity] || Local installation directory || Runs the package and needs write access for the database, logs, Grafana state and saved dashboards. Confirm the assigned identity and folder permissions. The local Grafana administrator is a separate interactive account.
+|}
+
+== Restrictions ==
+The reviewed package targets 64-bit Windows. It needs a writable installation directory and network access to the AVEVA Historian SQL endpoint. Charting continues from the local copy during a source interruption, subject to local service availability. Accuracy of per-item calculations depends on the source preserving the required events. The project source carries an MIT licence. Bundled components and site Historian access are subject to their respective terms. Production usage, distribution and any site-specific geographic restrictions require owner confirmation.
+
+== Setup Instruction ==
+# Follow the repository README section for the Windows package without Docker. Extract the approved offline build to a short, writable path with Latin characters. Record the deployed version and approved internal package location.
+# Before network access is enabled, agree who can reach the management UI and Grafana, apply site access controls and replace the package's default credentials. Verify that the approved access path enforces the intended permissions.
+# Start the package using start.bat. Open the local application and configure the AVEVA SQL Server endpoint, authentication method, include/exclude tag patterns, initial history window and poll interval.
+# Run the connection test. Verify login, tag discovery and a sample history read. Start copying and compare a known tag's time, value and quality with the source.
+# Open a trend and a numeric Stat panel in Grafana. For the weighing use case, reconcile results against a shift with known box counts and weights. Record the test interval and result.
+
+== Backup and Recovery ==
+Proposed procedure for the Windows package. The site backup schedule, destination, retention period, recovery owner and latest DR test result require confirmation.
+
+# Back up the approved package version, its configuration (including .env), and the complete data directory. This includes PostgreSQL history, settings, scripts and copy progress (data\postgres), Grafana state (data\grafana) and dashboard files saved by the application (data\dashboards). Protect the backup as it can contain credentials.
+# For a file-level backup, close the application, run stop.bat and verify that the packaged PostgreSQL and Grafana processes have stopped before copying the installation. Store a dated copy on approved storage outside the application host. Schedule the resulting downtime. If the site needs online backup, agree a database-consistent method and test it.
+# Restore the matching package, configuration and consistent data copy to an isolated recovery host. Reapply directory permissions and network controls, start the package, then verify saved sources, scripts, Grafana dashboards and a reference trend.
+# Once authorised to reconnect to Historian, check the saved copy position and reconcile the recovered interval against source records. Record backup timestamp, actual loss, recovery duration, outstanding gaps and the result of a reference dashboard check.
+
+DR test evidence: [test date, owner, backup identifier, achieved RTO/RPO, result and internal evidence reference].
+
+== Architecture Review Outcome ==
+'''Scope of review:''' Windows offline deployment of historian2grafana for read-only AVEVA Historian acquisition, local analytical storage, scripts, browser access and Grafana dashboards. Include management access, service identities, data retention and recovery. FactoryTalk integration is outside the current implementation.
+
+'''EA review reference:''' [assigned ticket]
+
+'''Solution Architect:''' [assigned name]
+
+'''EA Senior Architect:''' [assigned name]
+
+{| class="wikitable"
+! Review type !! Ticket # !! Outcome !! Comments
+|-
+| VcRM || [if applicable] || [reviewer decision] || Applicability and residual risk to be recorded by the responsible reviewer.
+|-
+| SAR || [assigned ticket] || [reviewer decision] || Record the agreed controls for management access, credentials and source connectivity.
+|-
+| EA || [assigned ticket] || [reviewer decision] || Record the architecture decision and any conditions of approval.
+|}
+
+== Business Capability Mapping ==
+Business use: site manufacturing operations — monitoring production measurements and analysing process performance. [Process owner to select the exact capability name from the internal catalogue and enter it in the page template's highlight parameter.]
